@@ -10,6 +10,7 @@ class NexusOmegaDashboard {
         this.lastSignal = null;
         this.lastTradeTime = null;
         this.startTime = Date.now();
+        this.audioCtx = null;
         this.circuitLines = [];
         
         this.init();
@@ -18,6 +19,7 @@ class NexusOmegaDashboard {
     init() {
         this.generateCircuitLines();
         this.checkBootSequence();
+        this.setupEventListeners();
     }
 
     generateCircuitLines() {
@@ -35,7 +37,32 @@ class NexusOmegaDashboard {
         }
     }
 
+    // ─── AUDIO SYNTHESIS: Generate Sci-Fi Beeps without MP3s! ───
+    beep(freq = 800, duration = 80) {
+        if (!this.audioEnabled || !this.audioCtx) return;
+        try {
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+            
+            // Square wave for the crunchy, retro computer aesthetic
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime); 
+            
+            gainNode.gain.setValueAtTime(0.05, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + (duration/1000));
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+            
+            oscillator.start();
+            oscillator.stop(this.audioCtx.currentTime + (duration/1000));
+        } catch (e) {
+            console.log('Beep failed', e);
+        }
+    }
+
     checkBootSequence() {
+        // If the boot sequence ALREADY played this session, skip straight to the dashboard
         if (sessionStorage.getItem('nexus_booted')) {
             this.showDashboard();
             this.startPolling();
@@ -43,26 +70,71 @@ class NexusOmegaDashboard {
             return;
         }
 
-        this.playBootSequence();
+        // Create an immersive "Click to Start" overlay to unlock browser audio permissions
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.top = '0'; overlay.style.left = '0';
+        overlay.style.width = '100vw'; overlay.style.height = '100vh';
+        overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.95)';
+        overlay.style.zIndex = '9999';
+        overlay.style.display = 'flex';
+        overlay.style.justifyContent = 'center';
+        overlay.style.alignItems = 'center';
+        overlay.style.cursor = 'pointer';
+        overlay.style.color = '#00ffcc';
+        overlay.style.fontFamily = 'monospace';
+        overlay.style.fontSize = '24px';
+        overlay.style.letterSpacing = '2px';
+        overlay.style.transition = 'opacity 0.5s';
+        
+        overlay.innerHTML = `
+            <div style="padding: 30px; border: 2px solid #00ffcc; box-shadow: 0 0 20px rgba(0,255,204,0.2); background: rgba(0, 255, 204, 0.05); text-align: center;">
+                <div style="font-size: 14px; margin-bottom: 10px; opacity: 0.7;">CONNECTION ESTABLISHED</div>
+                <div>[ INITIATE SYSTEM STARTUP ]</div>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener('click', () => {
+            // Wake up the Audio Context the exact second the user clicks!
+            if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                document.body.removeChild(overlay);
+                this.playBootSequence();
+            }, 500);
+        });
     }
 
     playBootSequence() {
+        // Play the robotic intro phrase!
+        this.speak("Loading... I am an A. I. trading bot. Let's make some money!");
+
         const bootTexts = [
             { text: 'INITIALIZING NEXUS OMEGA...', sub: 'Loading core systems', delay: 0 },
-            { text: 'CONNECTING TO BINANCE...', sub: 'WebSocket handshake', delay: 600 },
-            { text: 'CONNECTING TO COINBASE...', sub: 'REST API established', delay: 1000 },
-            { text: 'CONNECTING TO BYBIT...', sub: 'Market data feed active', delay: 1400 },
-            { text: 'CONNECTING TO OKX...', sub: 'Price stream connected', delay: 1800 },
-            { text: 'CONNECTING TO KRAKEN...', sub: 'Aggregating data sources', delay: 2200 },
-            { text: 'CALIBRATING CONSENSUS...', sub: 'Multi-exchange sync', delay: 2600 },
-            { text: 'NEURAL NETWORKS ONLINE...', sub: 'Signal engine ready', delay: 3000 },
-            { text: 'SYSTEM READY', sub: 'All systems operational', delay: 3600 }
+            { text: 'CONNECTING TO BINANCE...', sub: 'WebSocket handshake', delay: 800 },
+            { text: 'CONNECTING TO COINBASE...', sub: 'REST API established', delay: 1400 },
+            { text: 'CONNECTING TO BYBIT...', sub: 'Market data feed active', delay: 2000 },
+            { text: 'CONNECTING TO OKX...', sub: 'Price stream connected', delay: 2600 },
+            { text: 'CONNECTING TO KRAKEN...', sub: 'Aggregating data sources', delay: 3200 },
+            { text: 'CALIBRATING CONSENSUS...', sub: 'Multi-exchange sync', delay: 3800 },
+            { text: 'NEURAL NETWORKS ONLINE...', sub: 'Signal engine ready', delay: 4400 },
+            { text: 'SYSTEM READY', sub: 'All systems operational', delay: 5200 }
         ];
 
         bootTexts.forEach(step => {
             setTimeout(() => {
                 document.getElementById('boot-text').textContent = step.text;
                 document.getElementById('boot-subtext').textContent = step.sub;
+                
+                // Play a dynamic beep frequency for each line of the boot!
+                if (step.text === 'SYSTEM READY') {
+                    this.beep(1200, 300); // Triumphant high beep
+                } else {
+                    this.beep(800 + Math.random() * 200, 60); // Random computer processing tick
+                }
                 
                 if (step.text === 'SYSTEM READY') {
                     setTimeout(() => {
@@ -82,7 +154,6 @@ class NexusOmegaDashboard {
 
     showDashboard() {
         document.getElementById('dashboard').style.display = 'block';
-        this.speak('System online. All exchanges connected.');
     }
 
     startUptimeCounter() {
@@ -163,7 +234,6 @@ class NexusOmegaDashboard {
             const div = document.createElement('div');
             div.className = 'exchange-tile';
             
-            // Robust formatting specifically for Vercel
             const change24h = ex.change_24h || 0;
             const latency = ex.latency || 0;
             const changeClass = change24h >= 0 ? 'up' : 'down';
@@ -333,6 +403,13 @@ class NexusOmegaDashboard {
     startPolling() {
         this.fetchStatus();
         this.pollingInterval = setInterval(() => this.fetchStatus(), 10000);
+    }
+
+    setupEventListeners() {
+        // Keep the global mute toggle just in case
+        document.addEventListener('click', () => {
+            if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }, { once: true });
     }
 
     showError(msg) {
