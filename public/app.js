@@ -18,8 +18,6 @@ class NexusOmegaDashboard {
     init() {
         this.generateCircuitLines();
         this.checkBootSequence();
-        this.setupEventListeners();
-        this.startUptimeCounter();
     }
 
     generateCircuitLines() {
@@ -41,6 +39,7 @@ class NexusOmegaDashboard {
         if (sessionStorage.getItem('nexus_booted')) {
             this.showDashboard();
             this.startPolling();
+            this.startUptimeCounter();
             return;
         }
 
@@ -60,10 +59,6 @@ class NexusOmegaDashboard {
             { text: 'SYSTEM READY', sub: 'All systems operational', delay: 3600 }
         ];
 
-        if (this.audioEnabled) {
-            this.playSound('startup').catch(() => {});
-        }
-
         bootTexts.forEach(step => {
             setTimeout(() => {
                 document.getElementById('boot-text').textContent = step.text;
@@ -75,6 +70,7 @@ class NexusOmegaDashboard {
                         setTimeout(() => {
                             document.getElementById('boot-sequence').style.display = 'none';
                             sessionStorage.setItem('nexus_booted', 'true');
+                            this.startUptimeCounter();
                             this.showDashboard();
                             this.startPolling();
                         }, 500);
@@ -119,29 +115,16 @@ class NexusOmegaDashboard {
     }
 
     updateDashboard(data) {
-        // Update price
-        if (data.price) {
-            this.updatePriceDisplay(data.price);
-        }
-
-        // Update signal
-        if (data.signal) {
-            this.updateSignalDisplay(data.signal);
-        }
-
-        // Update stats
-        if (data.stats) {
-            this.updateStats(data.stats);
-        }
-
-        // Update position
+        if (data.price) this.updatePriceDisplay(data.price);
+        if (data.signal) this.updateSignalDisplay(data.signal);
+        if (data.stats) this.updateStats(data.stats);
+        
         if (data.position) {
             this.updatePosition(data.position);
         } else {
             this.clearPosition();
         }
 
-        // Update history
         if (data.lastTrade && data.lastTrade.time !== this.lastTradeTime) {
             this.lastTradeTime = data.lastTrade.time;
             this.announceTrade(data.lastTrade);
@@ -154,24 +137,16 @@ class NexusOmegaDashboard {
         const oldPrice = parseFloat(mainPrice.dataset.price || 0);
         const newPrice = priceData.consensus;
         
-        mainPrice.textContent = newPrice.toLocaleString('en-US', { 
-            minimumFractionDigits: 2, 
-            maximumFractionDigits: 2 
-        });
+        mainPrice.textContent = newPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         mainPrice.dataset.price = newPrice;
         
         if (oldPrice !== 0 && oldPrice !== newPrice) {
             const direction = newPrice > oldPrice ? 'up' : 'down';
             mainPrice.classList.remove('up', 'down');
-            void mainPrice.offsetWidth; // Trigger reflow
+            void mainPrice.offsetWidth; 
             mainPrice.classList.add(direction);
-            
-            if (this.audioEnabled && Math.abs(newPrice - oldPrice) / oldPrice > 0.001) {
-                // Subtle tick sound for significant price moves
-            }
         }
 
-        // Update spread indicator
         const spreadEl = document.getElementById('spread-indicator');
         if (priceData.spread > 0.3) {
             spreadEl.className = 'spread-warning';
@@ -181,7 +156,6 @@ class NexusOmegaDashboard {
             spreadEl.textContent = `✓ Consensus active (${priceData.exchanges?.length || 0} exchanges)`;
         }
 
-        // Update exchange grid with fallback safety values so Vercel doesn't crash the renderer
         const exchangeGrid = document.getElementById('exchange-prices');
         exchangeGrid.innerHTML = '';
         
@@ -189,6 +163,7 @@ class NexusOmegaDashboard {
             const div = document.createElement('div');
             div.className = 'exchange-tile';
             
+            // Robust formatting specifically for Vercel
             const change24h = ex.change_24h || 0;
             const latency = ex.latency || 0;
             const changeClass = change24h >= 0 ? 'up' : 'down';
@@ -202,9 +177,7 @@ class NexusOmegaDashboard {
             exchangeGrid.appendChild(div);
         });
 
-        // Update header
-        document.getElementById('header-exchanges').textContent = 
-            `${priceData.exchanges?.length || 0}/5`;
+        document.getElementById('header-exchanges').textContent = `${priceData.exchanges?.length || 0}/5`;
     }
 
     updateSignalDisplay(signal) {
@@ -214,25 +187,18 @@ class NexusOmegaDashboard {
         
         textEl.textContent = signal.text;
         
-        // Update styling colors
         textEl.className = 'signal-text';
-        if (signal.text.includes('LONG')) {
-            textEl.classList.add('signal-long');
-        } else if (signal.text.includes('SHORT')) {
-            textEl.classList.add('signal-short');
-        } else {
-            textEl.classList.add('signal-neutral');
-        }
+        if (signal.text.includes('LONG')) textEl.classList.add('signal-long');
+        else if (signal.text.includes('SHORT')) textEl.classList.add('signal-short');
+        else textEl.classList.add('signal-neutral');
         
-        // Update confidence bar length
         const conf = Math.round(signal.confidence);
         confValueEl.textContent = `${conf}%`;
         confBarEl.style.width = `${conf}%`;
     }
 
     updateStats(stats) {
-        document.getElementById('balance').textContent = 
-            '$' + parseFloat(stats.balance).toFixed(2);
+        document.getElementById('balance').textContent = '$' + parseFloat(stats.balance).toFixed(2);
         
         const pnl = parseFloat(stats.profitLoss);
         const pnlEl = document.getElementById('balance-change');
@@ -243,11 +209,9 @@ class NexusOmegaDashboard {
         document.getElementById('total-trades').textContent = stats.totalTrades;
         document.getElementById('max-drawdown').textContent = stats.maxDrawdown + '%';
         
-        // Calculate profit factor
         const pf = stats.totalLoss > 0 ? (stats.totalProfit / stats.totalLoss).toFixed(2) : '0.00';
         document.getElementById('profit-factor').textContent = pf;
 
-        // Update cooldown
         const cooldownEl = document.getElementById('cooldown');
         const cooldownBar = document.getElementById('cooldown-bar');
         const cooldownSection = document.getElementById('cooldown-section');
@@ -279,8 +243,7 @@ class NexusOmegaDashboard {
         pnlEl.className = `pnl-value ${pnl >= 0 ? 'profit' : 'loss'}`;
         
         const pnlPercent = (pnl / (pos.entryPrice * pos.quantity / 20)) * 100;
-        document.getElementById('pos-pnl-percent').textContent = 
-            (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%';
+        document.getElementById('pos-pnl-percent').textContent = (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%';
 
         document.getElementById('position-details').style.display = 'grid';
         document.getElementById('pos-entry').textContent = '$' + pos.entryPrice.toLocaleString();
@@ -288,7 +251,6 @@ class NexusOmegaDashboard {
         document.getElementById('pos-tp').textContent = '$' + pos.takeProfit.toLocaleString();
         document.getElementById('pos-size').textContent = pos.quantity.toFixed(4) + ' BTC';
 
-        // Data sources
         const sourcesEl = document.getElementById('data-sources');
         sourcesEl.innerHTML = '';
         pos.dataSources?.forEach(src => {
@@ -310,26 +272,15 @@ class NexusOmegaDashboard {
     announceTrade(trade) {
         const isProfit = trade.netPnl > 0;
         
-        if (this.audioEnabled) {
-            this.playSound(isProfit ? 'profit' : 'loss').catch(() => {});
-        }
-
-        const utterance = new SpeechSynthesisUtterance();
-        utterance.rate = 0.9;
-        utterance.pitch = isProfit ? 1.0 : 0.8;
-        
         const phrases = isProfit 
             ? ['Profit secured.', 'Target acquired.', 'Excellent execution.', 'Cashing in!']
             : ['Position closed.', 'Stop loss triggered.', 'Exiting position.'];
         
         const phrase = phrases[Math.floor(Math.random() * phrases.length)];
         const amount = Math.abs(trade.netPnl).toFixed(2);
+        const textToSpeech = `${phrase} ${isProfit ? 'Profit' : 'Loss'} of ${amount} dollars.`;
         
-        utterance.text = `${phrase} ${isProfit ? 'Profit' : 'Loss'} of ${amount} dollars.`;
-        
-        if (this.audioEnabled) {
-            speechSynthesis.speak(utterance);
-        }
+        this.speak(textToSpeech, true);
     }
 
     addTradeToHistory(trade) {
@@ -358,42 +309,30 @@ class NexusOmegaDashboard {
         
         list.insertBefore(item, list.firstChild);
         
-        // Keep only last 10
-        while (list.children.length > 10) {
-            list.removeChild(list.lastChild);
-        }
+        while (list.children.length > 10) list.removeChild(list.lastChild);
     }
 
-    async playSound(type) {
-        try {
-            const audio = new Audio(`/sounds/${type}.mp3`);
-            audio.volume = 0.5;
-            await audio.play();
-        } catch (e) {
-            console.log('Sound play failed:', e);
-        }
-    }
-
-    speak(text) {
+    speak(text, isAlert = false) {
         if (!this.audioEnabled) return;
         const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Deep robotic pitch for JARVIS aesthetic
         utterance.rate = 0.9;
-        utterance.pitch = 0.9;
+        utterance.pitch = isAlert ? 0.3 : 0.6; 
+        
+        // Use a robotic-sounding system voice
+        const voices = speechSynthesis.getVoices();
+        if (voices.length > 0) {
+            const roboticVoice = voices.find(v => v.name.includes('Google') || v.name.includes('Microsoft Desktop')) || voices[0];
+            utterance.voice = roboticVoice;
+        }
+
         speechSynthesis.speak(utterance);
     }
 
     startPolling() {
         this.fetchStatus();
         this.pollingInterval = setInterval(() => this.fetchStatus(), 10000);
-    }
-
-    setupEventListeners() {
-        // Initialize audio context on first interaction
-        document.addEventListener('click', () => {
-            if (typeof AudioContext !== 'undefined' && !this.audioContext) {
-                this.audioContext = new AudioContext();
-            }
-        }, { once: true });
     }
 
     showError(msg) {
