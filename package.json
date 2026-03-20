@@ -1,0 +1,16 @@
+{
+    "name": "nexus-omega",
+    "version": "4.1.0",
+    "description": "Multi-Exchange AI Trading Simulation Engine",
+    "type": "module",
+    "scripts": {
+          "dev": "vercel dev",
+          "deploy": "vercel --prod"
+    },
+    "dependencies": {
+          "@supabase/supabase-js": "^2.39.0"
+    },
+    "engines": {
+          "node": ">=18.x"
+    }
+}
