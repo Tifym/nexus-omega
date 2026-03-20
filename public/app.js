@@ -1,405 +1,340 @@
 // ═══════════════════════════════════════════════════════════════
-// NEXUS OMEGA v4.1 - JARVIS Interface Controller
+// NEXUS OMEGA v4.0 - Glassmorphism UI Controller
 // ═══════════════════════════════════════════════════════════════
 
 class NexusOmegaDashboard {
     constructor() {
         this.apiUrl = '';
         this.pollingInterval = null;
-        this.audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
-        this.lastSignal = null;
-        this.lastTradeTime = null;
-        this.startTime = Date.now();
-        this.audioCtx = null;
-        this.circuitLines = [];
-        
-        this.init();
-    }
+        this.soundEnabled = true;
+        this.audioContext = null;
 
-    init() {
-        this.generateCircuitLines();
+        this.lastState = {
+            signalText: null,
+            positionId: null, // tracked via hasOpenPosition diff
+            balance: null
+        };
+
         this.checkBootSequence();
-        this.startUptimeCounter();
-        this.setupEventListeners();
-    }
-
-    generateCircuitLines() {
-        const container = document.getElementById('circuit-bg');
-        if (!container) return;
-        
-        for (let i = 0; i < 5; i++) {
-            const line = document.createElement('div');
-            line.className = 'circuit-line';
-            line.style.top = `${Math.random() * 100}%`;
-            line.style.width = `${Math.random() * 200 + 100}px`;
-            line.style.animationDelay = `${Math.random() * 5}s`;
-            line.style.animationDuration = `${Math.random() * 10 + 15}s`;
-            container.appendChild(line);
-        }
-    }
-
-    // ─── AUDIO SYNTHESIS: Sleek, Modern Sci-Fi Beeps ───
-    beep(freq = 900, duration = 80) {
-        if (!this.audioEnabled || !this.audioCtx) return;
-        try {
-            const oscillator = this.audioCtx.createOscillator();
-            const gainNode = this.audioCtx.createGain();
-            
-            // Soft sine wave for a smooth, high-tech chime
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime); 
-            
-            // Lowered volume to 0.02 so it's a pleasant background tick
-            gainNode.gain.setValueAtTime(0.02, this.audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + (duration/1000));
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(this.audioCtx.destination);
-            
-            oscillator.start();
-            oscillator.stop(this.audioCtx.currentTime + (duration/1000));
-        } catch (e) {
-            console.log('Beep failed', e);
-        }
     }
 
     checkBootSequence() {
-        // Create an immersive "Click to Start" overlay to unlock browser audio permissions natively!
+        // Create an immersive "Click to Start" overlay to unlock browser audio natively!
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
-        overlay.style.top = '0'; overlay.style.left = '0';
-        overlay.style.width = '100vw'; overlay.style.height = '100vh';
-        overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.95)';
+        overlay.style.top = '0';
+        overlay.style.left = '0';
+        overlay.style.width = '100vw';
+        overlay.style.height = '100vh';
+        overlay.style.backgroundColor = '#000000';
         overlay.style.zIndex = '99999999';
         overlay.style.display = 'flex';
+        overlay.style.flexDirection = 'column';
         overlay.style.justifyContent = 'center';
         overlay.style.alignItems = 'center';
-        overlay.style.cursor = 'pointer';
-        overlay.style.color = '#00ffcc';
-        overlay.style.fontFamily = 'monospace';
-        overlay.style.fontSize = '24px';
-        overlay.style.letterSpacing = '2px';
-        overlay.style.transition = 'opacity 0.5s';
-        
-        overlay.innerHTML = `
-            <div style="padding: 30px; border: 2px solid #00ffcc; box-shadow: 0 0 20px rgba(0,255,204,0.2); background: rgba(0, 255, 204, 0.05); text-align: center;">
-                <div style="font-size: 14px; margin-bottom: 10px; opacity: 0.7;">CONNECTION ESTABLISHED</div>
-                <div>[ INITIATE SYSTEM STARTUP ]</div>
-            </div>
-        `;
-        
+        overlay.style.fontFamily = '"JetBrains Mono", monospace';
+        overlay.style.transition = 'opacity 1.5s ease';
+
+        const button = document.createElement('button');
+        button.innerText = '[ INITIATE SYSTEM STARTUP ]';
+        button.style.padding = '20px 40px';
+        button.style.backgroundColor = 'transparent';
+        button.style.color = '#00d4ff';
+        button.style.border = '2px solid #00d4ff';
+        button.style.fontSize = '24px';
+        button.style.cursor = 'pointer';
+        button.style.marginTop = '20px';
+        button.style.letterSpacing = '2px';
+        button.style.boxShadow = '0 0 20px rgba(0, 212, 255, 0.3)';
+
+        button.onmouseover = () => {
+            button.style.backgroundColor = '#00d4ff';
+            button.style.color = '#000';
+        };
+        button.onmouseout = () => {
+            button.style.backgroundColor = 'transparent';
+            button.style.color = '#00d4ff';
+        };
+
+        overlay.appendChild(button);
         document.body.appendChild(overlay);
 
-        overlay.addEventListener('click', () => {
-            if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        button.addEventListener('click', async () => {
+            button.style.opacity = '0';
+            this.initAudio();
+
+            const bootLines = [
+                "Establishing secure uplink...",
+                "Bypassing node security...",
+                "Syncing neural trading engine...",
+                "Loading... I am an AI Trading bot. Let's make some money!"
+            ];
+
+            let yOffset = 40;
+            for (let i = 0; i < bootLines.length; i++) {
+                await new Promise(r => setTimeout(r, 600));
+                this.playBeep(800 + (i * 100), 100, 'square');
+                
+                const line = document.createElement('div');
+                line.style.color = '#00d084';
+                line.style.fontSize = '16px';
+                line.style.marginTop = '10px';
+                line.style.textShadow = '0 0 10px #00d084';
+                line.innerText = '> ' + bootLines[i];
+                overlay.appendChild(line);
+
+                if (i === bootLines.length - 1) {
+                    this.speak(bootLines[i]);
+                }
+            }
+
+            await new Promise(r => setTimeout(r, 2500));
             
             overlay.style.opacity = '0';
             setTimeout(() => {
-                document.body.removeChild(overlay);
-                this.playBootSequence();
-            }, 500);
+                overlay.remove();
+                this.startPolling();
+                this.updateClock();
+            }, 1500);
         });
     }
 
-    playBootSequence() {
-        // Play the intro with a crisp, clear voice!
-        this.speak("Loading... I am an A. I. trading bot. Let's make some money!");
-
-        const bootTexts = [
-            { text: 'INITIALIZING NEXUS OMEGA...', sub: 'Loading core systems', delay: 0 },
-            { text: 'CONNECTING TO BINANCE...', sub: 'WebSocket handshake', delay: 800 },
-            { text: 'CONNECTING TO COINBASE...', sub: 'REST API established', delay: 1400 },
-            { text: 'CONNECTING TO BYBIT...', sub: 'Market data feed active', delay: 2000 },
-            { text: 'CONNECTING TO OKX...', sub: 'Price stream connected', delay: 2600 },
-            { text: 'CONNECTING TO KRAKEN...', sub: 'Aggregating data sources', delay: 3200 },
-            { text: 'CALIBRATING CONSENSUS...', sub: 'Multi-exchange sync', delay: 3800 },
-            { text: 'NEURAL NETWORKS ONLINE...', sub: 'Signal engine ready', delay: 4400 },
-            { text: 'SYSTEM READY', sub: 'All systems operational', delay: 5200 }
-        ];
-
-        bootTexts.forEach(step => {
-            setTimeout(() => {
-                document.getElementById('boot-text').textContent = step.text;
-                document.getElementById('boot-subtext').textContent = step.sub;
-                
-                // Play a dynamic beep frequency for each line of the boot!
-                if (step.text === 'SYSTEM READY') {
-                    this.beep(1600, 300); // Triumphant high beep
-                } else {
-                    this.beep(800 + Math.random() * 200, 60); // Random computer tick
-                }
-                
-                if (step.text === 'SYSTEM READY') {
-                    setTimeout(() => {
-                        document.getElementById('boot-sequence').style.opacity = '0';
-                        setTimeout(() => {
-                            document.getElementById('boot-sequence').style.display = 'none';
-                            this.showDashboard();
-                            this.startPolling();
-                        }, 500);
-                    }, 500);
-                }
-            }, step.delay);
-        });
+    initAudio() {
+        if (!this.audioContext) {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
     }
 
-    showDashboard() {
-        document.getElementById('dashboard').style.display = 'block';
-    }
-
-    startUptimeCounter() {
-        setInterval(() => {
-            const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-            const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
-            const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
-            const seconds = (elapsed % 60).toString().padStart(2, '0');
-            document.getElementById('header-uptime').textContent = `${hours}:${minutes}:${seconds}`;
-            
-            const now = new Date();
-            document.getElementById('timestamp').textContent = now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-        }, 1000);
-    }
-
-    async fetchStatus() {
-        const start = Date.now();
+    playBeep(frequency = 800, duration = 200, type = 'sine') {
+        if (!this.soundEnabled || !this.audioContext) return;
         try {
-            const response = await fetch('/api/status');
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            oscillator.frequency.value = frequency;
+            oscillator.type = type;
+            gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration / 1000);
+            oscillator.start(this.audioContext.currentTime);
+            oscillator.stop(this.audioContext.currentTime + duration / 1000);
+        } catch (e) {
+            console.error('Beep failed:', e);
+        }
+    }
+
+    speak(text) {
+        if (!this.soundEnabled || !('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.2;
+        utterance.volume = 0.8;
+        
+        let voices = window.speechSynthesis.getVoices();
+        if (voices.length > 0) {
+            const voice = voices.find(v => v.name.includes('Google UK English Female') || v.name.includes('Samantha') || v.name.includes('Siri'));
+            if (voice) utterance.voice = voice;
+        }
+        window.speechSynthesis.speak(utterance);
+    }
+
+    playTradeOpen() {
+        this.playBeep(600, 300, 'sine');
+        setTimeout(() => this.playBeep(800, 200, 'sine'), 100);
+        this.speak("Live trade intercepted. Executing position.");
+    }
+    
+    playTradeClose(isProfit) {
+        if (isProfit) {
+            this.playBeep(1000, 150, 'sine');
+            setTimeout(() => this.playBeep(1200, 150, 'sine'), 100);
+            setTimeout(() => this.playBeep(1500, 200, 'sine'), 200);
+            this.speak("Trade closed. Taking profit.");
+        } else {
+            this.playBeep(400, 300, 'sawtooth');
+            setTimeout(() => this.playBeep(300, 400, 'sawtooth'), 150);
+            this.speak("Trade closed at a loss.");
+        }
+    }
+
+    startPolling() {
+        this.fetchData();
+        this.pollingInterval = setInterval(() => this.fetchData(), 2000);
+        setInterval(() => this.updateClock(), 1000);
+    }
+
+    updateClock() {
+        const el = document.getElementById('clock');
+        if (el) {
+            el.innerText = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+    }
+
+    formatPrice(price) {
+        if (!price || isNaN(price)) return '0.00';
+        return price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    async fetchData() {
+        try {
+            const response = await fetch(`${this.apiUrl}/api/status`);
             const data = await response.json();
             
-            document.getElementById('header-latency').textContent = `${Date.now() - start}ms`;
-            document.getElementById('footer-latency').textContent = `Latency: ${Date.now() - start}ms`;
-            
+            if (data.error) {
+                console.error("API Error:", data.error);
+                return;
+            }
             this.updateDashboard(data);
         } catch (error) {
-            this.showError('Connection lost - retrying...');
-            console.error('Status fetch failed:', error);
+            console.error("Fetch failed:", error);
         }
     }
 
     updateDashboard(data) {
-        if (data.price) this.updatePriceDisplay(data.price);
-        if (data.signal) this.updateSignalDisplay(data.signal);
-        if (data.stats) this.updateStats(data.stats);
+        if (!data || !data.signal) return;
+
+        // 1. Header & Market
+        document.getElementById('header-price').textContent = '$' + this.formatPrice(data.price.consensus);
+        document.getElementById('header-spread').textContent = data.price.spread.toFixed(3) + '% Spread';
+        document.getElementById('header-exchanges').textContent = data.price.exchanges.length + ' LIVE EXCH';
         
+        let fearGreed = data.signal.fearGreed || 50;
+        let fearClass = (fearGreed < 25) ? 'Extreme Fear' : (fearGreed > 75) ? 'Extreme Greed' : 'Neutral';
+        document.getElementById('header-fear-val').textContent = fearGreed;
+        document.getElementById('header-fear-class').textContent = fearClass;
+        
+        const fCol = fearGreed < 25 ? 'var(--accent-red)' : fearGreed > 75 ? 'var(--accent-green)' : 'var(--text-secondary)';
+        document.getElementById('header-fear-val').style.color = fCol;
+        document.getElementById('header-fear-class').style.color = fCol;
+
+        // 2. Portfolio Stats
+        document.getElementById('balance-val').textContent = '$' + this.formatPrice(data.stats.balance);
+        document.getElementById('initial-balance').textContent = '$' + this.formatPrice(data.stats.initialBalance);
+        
+        const totalReturn = ((data.stats.balance - data.stats.initialBalance) / data.stats.initialBalance) * 100;
+        const changeBadge = document.getElementById('balance-change-badge');
+        changeBadge.textContent = (totalReturn >= 0 ? '+' : '') + totalReturn.toFixed(2) + '%';
+        changeBadge.style.color = totalReturn >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+        document.getElementById('stat-winrate').textContent = data.stats.winRate + '%';
+        document.getElementById('stat-trades').textContent = data.stats.totalTrades;
+        document.getElementById('stat-drawdown').textContent = data.stats.maxDrawdown.toFixed(2) + '%';
+        
+        // 3. Signal Panel (EXECUTION BAR)
+        const sMain = document.getElementById('signal-main-box');
+        sMain.className = 'signal-main glass-strong ' + (data.signal.text.toLowerCase().replace('_','-'));
+        
+        const badge = document.getElementById('signal-badge');
+        badge.textContent = data.signal.text.replace('_', ' ');
+
+        const confScore = Math.max(0, data.signal.confidence);
+        const fillBar = document.getElementById('exec-fill-bar');
+        const execLabel = document.getElementById('exec-val');
+        
+        // Execution triggers at 65% visually
+        fillBar.style.width = Math.min(100, (confScore / 100) * 100) + '%';
+        execLabel.textContent = confScore + '% / 65%';
+        if (confScore >= 65 && data.signal.text !== 'NEUTRAL') {
+            fillBar.style.background = 'linear-gradient(90deg, #00d084 0%, #00d4ff 100%)';
+            execLabel.style.color = 'var(--accent-green)';
+        } else {
+            fillBar.style.background = 'linear-gradient(90deg, #f0b90b 0%, #f97316 100%)';
+            execLabel.style.color = 'var(--accent-yellow)';
+        }
+
+        document.getElementById('current-price').textContent = '$' + this.formatPrice(data.price.consensus);
+        
+        // Indicators
+        document.getElementById('metric-score').textContent = (data.signal.score > 0 ? '+' : '') + data.signal.score;
+        document.getElementById('metric-score').className = 'metric-value ' + (data.signal.score > 0 ? 'profit' : data.signal.score < 0 ? 'loss' : '');
+        
+        if (data.signal.indicators) {
+            document.getElementById('metric-rsi').textContent = data.signal.indicators.rsi;
+            document.getElementById('metric-atr').textContent = data.signal.indicators.atr;
+            document.getElementById('metric-vol').textContent = data.signal.indicators.volatility + '%';
+        }
+
+        const rList = document.getElementById('reasons-list');
+        rList.innerHTML = '';
+        if (data.signal.reasons && data.signal.reasons.length > 0) {
+            data.signal.reasons.forEach(r => {
+                const tag = document.createElement('span');
+                tag.className = 'reason-tag';
+                tag.textContent = typeof r === 'string' ? r : r.type;
+                rList.appendChild(tag);
+            });
+        }
+
+        // Active Trade Levels Check
+        const lvls = document.getElementById('trade-levels-container');
+        if (data.signal.text !== 'NEUTRAL' && data.signal.stopLoss) {
+            lvls.style.display = 'grid';
+            document.getElementById('level-sl').textContent = '$' + this.formatPrice(data.signal.stopLoss);
+            document.getElementById('level-tp').textContent = '$' + this.formatPrice(data.signal.takeProfit);
+        } else {
+            lvls.style.display = 'none';
+        }
+
+        // 4. Active Positions & Proximity Bars
+        const posCont = document.getElementById('active-positions-container');
         if (data.position) {
-            this.updatePosition(data.position);
-        } else {
-            this.clearPosition();
-        }
-
-        if (data.lastTrade && data.lastTrade.time !== this.lastTradeTime) {
-            this.lastTradeTime = data.lastTrade.time;
-            this.announceTrade(data.lastTrade);
-            this.addTradeToHistory(data.lastTrade);
-        }
-    }
-
-    updatePriceDisplay(priceData) {
-        const mainPrice = document.getElementById('main-price');
-        const oldPrice = parseFloat(mainPrice.dataset.price || 0);
-        const newPrice = priceData.consensus;
-        
-        mainPrice.textContent = newPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        mainPrice.dataset.price = newPrice;
-        
-        if (oldPrice !== 0 && oldPrice !== newPrice) {
-            const direction = newPrice > oldPrice ? 'up' : 'down';
-            mainPrice.classList.remove('up', 'down');
-            void mainPrice.offsetWidth; 
-            mainPrice.classList.add(direction);
-        }
-
-        const spreadEl = document.getElementById('spread-indicator');
-        if (priceData.spread > 0.3) {
-            spreadEl.className = 'spread-warning';
-            spreadEl.textContent = `⚠️ High spread: ${priceData.spread.toFixed(2)}%`;
-        } else {
-            spreadEl.className = 'spread-ok';
-            spreadEl.textContent = `✓ Consensus active (${priceData.exchanges?.length || 0} exchanges)`;
-        }
-
-        const exchangeGrid = document.getElementById('exchange-prices');
-        exchangeGrid.innerHTML = '';
-        
-        priceData.exchanges?.forEach(ex => {
-            const div = document.createElement('div');
-            div.className = 'exchange-tile';
+            const p = data.position;
+            const currentPrice = data.price.consensus;
             
-            const change24h = ex.change_24h || 0;
-            const latency = ex.latency || 0;
-            const changeClass = change24h >= 0 ? 'up' : 'down';
+            const distSL = Math.abs(currentPrice - p.stopLoss);
+            const distTP = Math.abs(p.takeProfit - currentPrice);
             
-            div.innerHTML = `
-                <div class="exchange-name">${ex.exchange}</div>
-                <div class="exchange-price">$${ex.price.toLocaleString()}</div>
-                <div class="exchange-change ${changeClass}">${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%</div>
-                <div class="exchange-latency">${latency}ms</div>
-            `;
-            exchangeGrid.appendChild(div);
-        });
-
-        document.getElementById('header-exchanges').textContent = `${priceData.exchanges?.length || 0}/5`;
-    }
-
-    updateSignalDisplay(signal) {
-        const textEl = document.getElementById('signal-text');
-        const confValueEl = document.getElementById('confidence-value');
-        const confBarEl = document.getElementById('confidence-bar');
-        
-        textEl.textContent = signal.text;
-        
-        textEl.className = 'signal-text';
-        if (signal.text.includes('LONG')) textEl.classList.add('signal-long');
-        else if (signal.text.includes('SHORT')) textEl.classList.add('signal-short');
-        else textEl.classList.add('signal-neutral');
-        
-        const conf = Math.round(signal.confidence);
-        confValueEl.textContent = `${conf}%`;
-        confBarEl.style.width = `${conf}%`;
-    }
-
-    updateStats(stats) {
-        document.getElementById('balance').textContent = '$' + parseFloat(stats.balance).toFixed(2);
-        
-        const pnl = parseFloat(stats.profitLoss);
-        const pnlEl = document.getElementById('balance-change');
-        pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${((pnl / stats.initialBalance) * 100).toFixed(2)}%)`;
-        pnlEl.className = `balance-change ${pnl >= 0 ? 'positive' : 'negative'}`;
-
-        document.getElementById('win-rate').textContent = stats.winRate + '%';
-        document.getElementById('total-trades').textContent = stats.totalTrades;
-        document.getElementById('max-drawdown').textContent = stats.maxDrawdown + '%';
-        
-        const pf = stats.totalLoss > 0 ? (stats.totalProfit / stats.totalLoss).toFixed(2) : '0.00';
-        document.getElementById('profit-factor').textContent = pf;
-
-        const cooldownEl = document.getElementById('cooldown');
-        const cooldownBar = document.getElementById('cooldown-bar');
-        const cooldownSection = document.getElementById('cooldown-section');
-        
-        if (stats.cooldownActive) {
-            cooldownSection.classList.remove('cooldown-ready');
-            const remaining = stats.cooldownRemaining;
-            cooldownEl.textContent = `${remaining}m ${Math.floor((stats.cooldownRemaining % 1) * 60)}s`;
-            cooldownBar.style.width = `${(remaining / 5) * 100}%`;
+            let html = \`<div class="position-card \${p.side.toLowerCase()} glass-hover">
+                <div class="pos-header">
+                    <div class="pos-pair"><span class="pos-symbol">BTC/USDT</span><span class="pos-leverage">20x</span></div>
+                    <div class="pos-pnl \${p.unrealizedPnl >= 0 ? 'profit' : 'loss'}">\${p.unrealizedPnl >= 0 ? '+' : ''}$\${this.formatPrice(p.unrealizedPnl)}</div>
+                </div>
+                <div class="pos-details-grid">
+                    <div class="pos-detail"><span class="detail-label">Side</span><span class="detail-value side-\${p.side.toLowerCase()}">\${p.side}</span></div>
+                    <div class="pos-detail"><span class="detail-label">Entry Price</span><span class="detail-value">$\${this.formatPrice(p.entryPrice)}</span></div>
+                </div>
+                <div class="position-prox-bars">
+                    <div class="prox-container">
+                        <div class="prox-label"><span>Stop Loss (\${distSL > distTP ? 'Safe' : 'Danger'})</span><span class="loss">$\${this.formatPrice(p.stopLoss)}</span></div>
+                        <div class="prox-bg"><div class="prox-fill stop-loss" style="width: \${Math.min(100, Math.max(5, (1 - (distSL/(distSL+distTP))) * 100))}%;"></div></div>
+                    </div>
+                    <div class="prox-container">
+                        <div class="prox-label"><span>Take Profit (\${distTP < distSL ? 'Close' : 'Far'})</span><span class="profit">$\${this.formatPrice(p.takeProfit)}</span></div>
+                        <div class="prox-bg"><div class="prox-fill take-profit" style="width: \${Math.min(100, Math.max(5, (1 - (distTP/(distSL+distTP))) * 100))}%;"></div></div>
+                    </div>
+                </div>
+            </div>\`;
+            posCont.innerHTML = html;
+            document.getElementById('unrealized-pnl-summary').textContent = (p.unrealizedPnl >= 0 ? '+' : '') + '$' + this.formatPrice(p.unrealizedPnl);
         } else {
-            cooldownSection.classList.add('cooldown-ready');
-            cooldownEl.textContent = 'READY TO TRADE';
-            cooldownBar.style.width = '100%';
-        }
-    }
-
-    updatePosition(pos) {
-        document.querySelector('.position-title').textContent = 'Active Position';
-        
-        const sideBadge = document.getElementById('pos-side');
-        sideBadge.style.display = 'inline-block';
-        sideBadge.textContent = pos.side;
-        sideBadge.className = `side-badge ${pos.side.toLowerCase()}`;
-
-        document.getElementById('position-pnl').style.display = 'block';
-        const pnlEl = document.getElementById('pos-pnl');
-        const pnl = pos.unrealizedPnl;
-        pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2);
-        pnlEl.className = `pnl-value ${pnl >= 0 ? 'profit' : 'loss'}`;
-        
-        const pnlPercent = (pnl / (pos.entryPrice * pos.quantity / 20)) * 100;
-        document.getElementById('pos-pnl-percent').textContent = (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%';
-
-        document.getElementById('position-details').style.display = 'grid';
-        document.getElementById('pos-entry').textContent = '$' + pos.entryPrice.toLocaleString();
-        document.getElementById('pos-sl').textContent = '$' + pos.stopLoss.toLocaleString();
-        document.getElementById('pos-tp').textContent = '$' + pos.takeProfit.toLocaleString();
-        document.getElementById('pos-size').textContent = pos.quantity.toFixed(4) + ' BTC';
-
-        const sourcesEl = document.getElementById('data-sources');
-        sourcesEl.innerHTML = '';
-        pos.dataSources?.forEach(src => {
-            const tag = document.createElement('span');
-            tag.className = 'source-tag';
-            tag.textContent = src.exchange;
-            sourcesEl.appendChild(tag);
-        });
-    }
-
-    clearPosition() {
-        document.querySelector('.position-title').textContent = 'No Active Position';
-        document.getElementById('pos-side').style.display = 'none';
-        document.getElementById('position-pnl').style.display = 'none';
-        document.getElementById('position-details').style.display = 'none';
-        document.getElementById('data-sources').innerHTML = '';
-    }
-
-    announceTrade(trade) {
-        const isProfit = trade.netPnl > 0;
-        
-        const phrases = isProfit 
-            ? ['Profit secured.', 'Target acquired.', 'Excellent execution.', 'Cashing in!']
-            : ['Position closed.', 'Stop loss triggered.', 'Exiting position.'];
-        
-        const phrase = phrases[Math.floor(Math.random() * phrases.length)];
-        const amount = Math.abs(trade.netPnl).toFixed(2);
-        const textToSpeech = `${phrase} ${isProfit ? 'Profit' : 'Loss'} of ${amount} dollars.`;
-        
-        this.speak(textToSpeech);
-    }
-
-    speak(text) {
-        if (!this.audioEnabled) return;
-        const utterance = new SpeechSynthesisUtterance(text);
-        
-        // Crisp, modern, normal pitch so it doesn't sound distorted.
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0; 
-        
-        // Prioritize a clean, modern-sounding voice
-        const voices = speechSynthesis.getVoices();
-        if (voices.length > 0) {
-            const crispVoice = voices.find(v => 
-                v.name.includes('Google') || 
-                v.name.includes('Samantha') || 
-                v.name.includes('Female')
-            ) || voices[0];
-            utterance.voice = crispVoice;
+            posCont.innerHTML = \`<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-text">No Active Positions</div><div class="empty-sub">Waiting for signal...</div></div>\`;
+            document.getElementById('unrealized-pnl-summary').textContent = '$0.00';
         }
 
-        speechSynthesis.speak(utterance);
-    }
+        // 5. System Audio State Tracking
+        if (data.signal.text !== this.lastState.signalText) {
+            if (data.signal.text !== 'NEUTRAL' && this.lastState.signalText !== null) {
+                this.playBeep(900, 100, 'sine');
+            }
+            this.lastState.signalText = data.signal.text;
+        }
 
-    startPolling() {
-        this.fetchStatus();
-        this.pollingInterval = setInterval(() => this.fetchStatus(), 10000);
-    }
+        const currentlyOpen = data.stats.hasOpenPosition;
+        if (currentlyOpen && !this.lastState.positionId && this.lastState.positionId !== null) {
+            this.playTradeOpen();
+        } else if (!currentlyOpen && this.lastState.positionId && data.lastTrade) {
+            this.playTradeClose(data.lastTrade.netPnl > 0);
+        }
+        if (this.lastState.positionId === null) {
+            // First load, don't play sounds
+        }
+        this.lastState.positionId = currentlyOpen;
 
-    setupEventListeners() {
-        document.addEventListener('click', () => {
-            if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }, { once: true });
-    }
-
-    showError(msg) {
-        const el = document.getElementById('error-banner');
-        el.textContent = msg;
-        el.style.display = 'block';
-        setTimeout(() => el.style.display = 'none', 5000);
+        document.getElementById('signal-timestamp').textContent = new Date(data.price.timestamp || Date.now()).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 }
 
-// Global functions
-function toggleMute() {
-    const btn = document.getElementById('mute-toggle');
-    const isMuted = btn.textContent.includes('Off');
-    btn.textContent = isMuted ? '🔊 Sound On' : '🔇 Sound Off';
-    btn.classList.toggle('muted', !isMuted);
-    localStorage.setItem('audioEnabled', isMuted);
-    if (window.dashboard) window.dashboard.audioEnabled = isMuted;
-}
-
-function refreshData() {
-    if (window.dashboard) window.dashboard.fetchStatus();
-}
-
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
     window.dashboard = new NexusOmegaDashboard();
 });
