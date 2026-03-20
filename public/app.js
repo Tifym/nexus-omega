@@ -38,18 +38,19 @@ class NexusOmegaDashboard {
         }
     }
 
-    // ─── AUDIO SYNTHESIS: Generate Sci-Fi Beeps without MP3s! ───
-    beep(freq = 800, duration = 80) {
+    // ─── AUDIO SYNTHESIS: Sleek, Modern Sci-Fi Beeps ───
+    beep(freq = 900, duration = 80) {
         if (!this.audioEnabled || !this.audioCtx) return;
         try {
             const oscillator = this.audioCtx.createOscillator();
             const gainNode = this.audioCtx.createGain();
             
-            // Square wave for the crunchy, retro computer aesthetic
-            oscillator.type = 'square';
+            // Soft sine wave for a smooth, high-tech chime
+            oscillator.type = 'sine';
             oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime); 
             
-            gainNode.gain.setValueAtTime(0.05, this.audioCtx.currentTime);
+            // Lowered volume to 0.02 so it's a pleasant background tick
+            gainNode.gain.setValueAtTime(0.02, this.audioCtx.currentTime);
             gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + (duration/1000));
             
             oscillator.connect(gainNode);
@@ -69,7 +70,6 @@ class NexusOmegaDashboard {
         overlay.style.top = '0'; overlay.style.left = '0';
         overlay.style.width = '100vw'; overlay.style.height = '100vh';
         overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.95)';
-        // Maximizing the z-index so it sits in front of the old loading screen!
         overlay.style.zIndex = '99999999';
         overlay.style.display = 'flex';
         overlay.style.justifyContent = 'center';
@@ -91,7 +91,6 @@ class NexusOmegaDashboard {
         document.body.appendChild(overlay);
 
         overlay.addEventListener('click', () => {
-            // Wake up the Audio Context the exact second the user clicks!
             if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             
             overlay.style.opacity = '0';
@@ -103,7 +102,7 @@ class NexusOmegaDashboard {
     }
 
     playBootSequence() {
-        // Play the dramatic intro!
+        // Play the intro with a crisp, clear voice!
         this.speak("Loading... I am an A. I. trading bot. Let's make some money!");
 
         const bootTexts = [
@@ -125,9 +124,9 @@ class NexusOmegaDashboard {
                 
                 // Play a dynamic beep frequency for each line of the boot!
                 if (step.text === 'SYSTEM READY') {
-                    this.beep(1200, 300); // Triumphant high beep
+                    this.beep(1600, 300); // Triumphant high beep
                 } else {
-                    this.beep(800 + Math.random() * 200, 60); // Random retro computer tick
+                    this.beep(800 + Math.random() * 200, 60); // Random computer tick
                 }
                 
                 if (step.text === 'SYSTEM READY') {
@@ -342,51 +341,26 @@ class NexusOmegaDashboard {
         const amount = Math.abs(trade.netPnl).toFixed(2);
         const textToSpeech = `${phrase} ${isProfit ? 'Profit' : 'Loss'} of ${amount} dollars.`;
         
-        this.speak(textToSpeech, true);
+        this.speak(textToSpeech);
     }
 
-    addTradeToHistory(trade) {
-        const list = document.getElementById('history-list');
-        const item = document.createElement('div');
-        item.className = 'history-item';
-        item.style.animation = 'fade-in 0.5s ease';
-        
-        const isProfit = trade.netPnl > 0;
-        
-        item.innerHTML = `
-            <div class="history-icon ${isProfit ? 'win' : 'loss'}">
-                ${isProfit ? '↑' : '↓'}
-            </div>
-            <div class="history-details">
-                <div class="history-type">${trade.side} ${trade.type}</div>
-                <div class="history-reason">${trade.reason}</div>
-            </div>
-            <div class="history-pnl">
-                <div class="history-pnl-value ${isProfit ? 'profit' : 'loss'}">
-                    ${isProfit ? '+' : ''}$${trade.netPnl.toFixed(2)}
-                </div>
-                <div class="history-time">${new Date(trade.time).toLocaleTimeString()}</div>
-            </div>
-        `;
-        
-        list.insertBefore(item, list.firstChild);
-        
-        while (list.children.length > 10) list.removeChild(list.lastChild);
-    }
-
-    speak(text, isAlert = false) {
+    speak(text) {
         if (!this.audioEnabled) return;
         const utterance = new SpeechSynthesisUtterance(text);
         
-        // Deep robotic pitch for JARVIS aesthetic
-        utterance.rate = 0.9;
-        utterance.pitch = isAlert ? 0.3 : 0.6; 
+        // Crisp, modern, normal pitch so it doesn't sound distorted.
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0; 
         
-        // Use a robotic-sounding system voice
+        // Prioritize a clean, modern-sounding voice
         const voices = speechSynthesis.getVoices();
         if (voices.length > 0) {
-            const roboticVoice = voices.find(v => v.name.includes('Google') || v.name.includes('Microsoft Desktop')) || voices[0];
-            utterance.voice = roboticVoice;
+            const crispVoice = voices.find(v => 
+                v.name.includes('Google') || 
+                v.name.includes('Samantha') || 
+                v.name.includes('Female')
+            ) || voices[0];
+            utterance.voice = crispVoice;
         }
 
         speechSynthesis.speak(utterance);
@@ -398,7 +372,6 @@ class NexusOmegaDashboard {
     }
 
     setupEventListeners() {
-        // Keep the global mute toggle just in case
         document.addEventListener('click', () => {
             if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }, { once: true });
