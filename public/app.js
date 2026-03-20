@@ -63,13 +63,6 @@ class NexusOmegaDashboard {
     }
 
     checkBootSequence() {
-        // If the boot sequence ALREADY played this session, skip straight to the dashboard
-        if (sessionStorage.getItem('nexus_booted')) {
-            this.showDashboard();
-            this.startPolling();
-            return;
-        }
-
         // Create an immersive "Click to Start" overlay to unlock browser audio permissions natively!
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
@@ -141,7 +134,6 @@ class NexusOmegaDashboard {
                         document.getElementById('boot-sequence').style.opacity = '0';
                         setTimeout(() => {
                             document.getElementById('boot-sequence').style.display = 'none';
-                            sessionStorage.setItem('nexus_booted', 'true');
                             this.showDashboard();
                             this.startPolling();
                         }, 500);
