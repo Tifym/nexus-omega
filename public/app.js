@@ -19,6 +19,7 @@ class NexusOmegaDashboard {
     init() {
         this.generateCircuitLines();
         this.checkBootSequence();
+        this.startUptimeCounter();
         this.setupEventListeners();
     }
 
@@ -66,11 +67,10 @@ class NexusOmegaDashboard {
         if (sessionStorage.getItem('nexus_booted')) {
             this.showDashboard();
             this.startPolling();
-            this.startUptimeCounter();
             return;
         }
 
-        // Create an immersive "Click to Start" overlay to unlock browser audio permissions
+        // Create an immersive "Click to Start" overlay to unlock browser audio permissions natively!
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
         overlay.style.top = '0'; overlay.style.left = '0';
@@ -109,7 +109,7 @@ class NexusOmegaDashboard {
     }
 
     playBootSequence() {
-        // Play the robotic intro phrase!
+        // Play the dramatic intro!
         this.speak("Loading... I am an A. I. trading bot. Let's make some money!");
 
         const bootTexts = [
@@ -133,7 +133,7 @@ class NexusOmegaDashboard {
                 if (step.text === 'SYSTEM READY') {
                     this.beep(1200, 300); // Triumphant high beep
                 } else {
-                    this.beep(800 + Math.random() * 200, 60); // Random computer processing tick
+                    this.beep(800 + Math.random() * 200, 60); // Random retro computer tick
                 }
                 
                 if (step.text === 'SYSTEM READY') {
@@ -142,7 +142,6 @@ class NexusOmegaDashboard {
                         setTimeout(() => {
                             document.getElementById('boot-sequence').style.display = 'none';
                             sessionStorage.setItem('nexus_booted', 'true');
-                            this.startUptimeCounter();
                             this.showDashboard();
                             this.startPolling();
                         }, 500);
