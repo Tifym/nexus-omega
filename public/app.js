@@ -181,19 +181,23 @@ class NexusOmegaDashboard {
             spreadEl.textContent = `✓ Consensus active (${priceData.exchanges?.length || 0} exchanges)`;
         }
 
-        // Update exchange grid
+        // Update exchange grid with fallback safety values so Vercel doesn't crash the renderer
         const exchangeGrid = document.getElementById('exchange-prices');
         exchangeGrid.innerHTML = '';
         
         priceData.exchanges?.forEach(ex => {
             const div = document.createElement('div');
             div.className = 'exchange-tile';
-            const changeClass = ex.change_24h >= 0 ? 'up' : 'down';
+            
+            const change24h = ex.change_24h || 0;
+            const latency = ex.latency || 0;
+            const changeClass = change24h >= 0 ? 'up' : 'down';
+            
             div.innerHTML = `
                 <div class="exchange-name">${ex.exchange}</div>
                 <div class="exchange-price">$${ex.price.toLocaleString()}</div>
-                <div class="exchange-change ${changeClass}">${ex.change_24h >= 0 ? '+' : ''}${ex.change_24h.toFixed(2)}%</div>
-                <div class="exchange-latency">${ex.latency}ms</div>
+                <div class="exchange-change ${changeClass}">${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%</div>
+                <div class="exchange-latency">${latency}ms</div>
             `;
             exchangeGrid.appendChild(div);
         });
