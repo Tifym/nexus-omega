@@ -7,9 +7,6 @@
                   { "src": "/app.js", "dest": "/public/app.js" },
                   { "src": "/(.*)", "dest": "/api/index.js" }
         ],
-        "crons": [
-                  { "path": "/api/evaluate", "schedule": "*/5 * * * *" }
-        ],
         "functions": {
                   "api/*.js": {
                               "maxDuration": 30
