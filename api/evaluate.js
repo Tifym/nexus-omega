@@ -1,77 +1,148 @@
-     import { marketFeed } from './_utils/market.js';
+import { marketFeed } from './_utils/market.js';
 import { signalEngine } from './_utils/signals.js';
-import { tradingEngine } from './_utils/trading.js';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
+const DEFAULT_STATE = {
+  balance: 2050.75, initial_balance: 2050.75,
+  total_trades: 0, winning_trades: 0,
+  max_drawdown: 0, last_trade_time: null
+};
+
 export default async function handler(req, res) {
-    try {
-          const startTime = Date.now();
-           const results = { timestamp: Date.now(), actions: [], errors: [] };
+  const log = { timestamp: Date.now(), actions: [], errors: [] };
 
-      let consensus;
-          try {
-                  consensus = await marketFeed.getConsensusPrice('BTC');
-                  results.consensus = { price: consensus.consensusPrice, spread: consensus.spread, exchanges: consensus.exchangesUsed + '/' + consensus.exchangesTotal, latency: Date.now() - startTime };
-          } catch (error) {
-                  results.errors.push('Price fetch failed: ' + error.message);
-                  return res.status(503).json(results);
-          }
+  try {
+    // 1. Fetch price + signal in parallel
+    const [consensus, signal] = await Promise.all([
+      marketFeed.getConsensusPrice('BTC'),
+      signalEngine.generateSignal()
+    ]);
 
-      const signal = await signalEngine.generateSignal();
-          results.signal = { direction: signal.signal, confidence: signal.confidence, score: signal.score, indicators: signal.indicators };
+    log.price  = consensus.consensusPrice;
+    log.signal = { text: signal.signal, confidence: signal.confidence };
 
-      const openPosition = await tradingEngine.getOpenPosition();
-           if (isOppositeSignal && signal.confidence >= 75) {
-                     const closeResult = await tradingEngine.closePosition(openPosition, consensus.consensusPrice, 'SIGNAL_REVERSAL', consensus);
-                     results.actions.push({ type: 'CLOSE', reason: 'SIGNAL_REVERSAL', pnl: closeResult.netPnl, pnlPercent: closeResult.pnlPercent });
-                     if (signal.signal.includes('STRONG')) {
-                                 try {
-                                               const newPos = await tradingEngine.openPosition(signal, consensus.consensusPrice, consensus);
-                                               results.actions.push({ type: 'OPEN', side: newPos.side, confidence: newPos.confidence, entryPrice: newPos.entryPrice });
-                                 } catch (error) {
-                                               results.errors.push('Re-entry failed: ' + error.message);
-                                 }
-                     }
-           } else {
-                     const exitCheck = await tradingEngine.checkPositionExit(openPosition, consensus);
-                     if (exitCheck.shouldClose) {
-                                 const closeResult = await tradingEngine.closePosition(openPosition, exitCheck.price, exitCheck.reason, consensus);
-                                 results.actions.push({ type: 'CLOSE', reason: exitCheck.reason, pnl: closeResult.netPnl, pnlPercent: closeResult.pnlPercent });
-                     } else {
-                                 results.actions.push({ type: 'UPDATE', positionId: openPosition.id, unrealizedPnl: exitCheck.unrealizedPnl, pnlPercent: exitCheck.pnlPercent });
-                     }
-           }
+    // 2. Load current state from Supabase
+    const { data: stateRow } = await supabase
+      .from('trading_state').select('*').eq('id', 'main').maybeSingle();
+    const state = stateRow || DEFAULT_STATE;
+
+    // Upsert state row if missing
+    if (!stateRow) {
+      await supabase.from('trading_state').upsert({ id: 'main', ...DEFAULT_STATE });
     }
-} else {
-        const canTrade = await tradingEngine.canTrade();
-        if (canTrade && signal.signal.includes('LONG') && !signal.signal.includes('SHORT')) {
-                  try {
-                              const newPos = await tradingEngine.openPosition(signal, consensus.consensusPrice, consensus);
-                              results.actions.push({ type: 'OPEN', side: newPos.side, confidence: newPos.confidence, entryPrice: newPos.entryPrice, stopLoss: newPos.stopLoss, takeProfit: newPos.takeProfit });
-                  } catch (error) {
-                              results.actions.push({ type: 'SKIPPED', reason: error.message });
-                  }
-        } else if (!canTrade) {
-                  results.actions.push({ type: 'COOLDOWN', message: '5-minute cooldown active' });
-        }
-}
 
-    await supabase.from('market_snapshots').insert({
-            btc_consensus_price: consensus.consensusPrice,
-            btc_binance_price: consensus.allPrices.find(p => p.exchange === 'Binance')?.price,
-            btc_coinbase_price: consensus.allPrices.find(p => p.exchange === 'Coinbase')?.price,
-            btc_bybit_price: consensus.allPrices.find(p => p.exchange === 'Bybit')?.price,
-            btc_okx_price: consensus.allPrices.find(p => p.exchange === 'OKX')?.price,
-            btc_kraken_price: consensus.allPrices.find(p => p.exchange === 'Kraken')?.price,
-            spread_percent: consensus.spread,
-            source: 'multi_exchange_consensus'
-    });
+    const { data: openPos } = await supabase
+      .from('positions').select('*').eq('status', 'OPEN').maybeSingle();
 
-    results.executionTime = Date.now() - startTime;
-    res.status(200).json(results);
-} catch (error) {
-      res.status(500).json({ error: error.message, timestamp: Date.now() });
-}
+    const now = Date.now();
+    const lastTime = state.last_trade_time ? Number(state.last_trade_time) : 0;
+    const cooldownMs = 5 * 60 * 1000;
+    const onCooldown = lastTime && (now - lastTime) < cooldownMs;
+
+    // 3. Check exits on open position
+    if (openPos && consensus.consensusPrice) {
+      const price = consensus.consensusPrice;
+      const margin = openPos.margin || 0;
+      const notional = margin * 20; // leverage
+
+      const rawPnl = openPos.side === 'LONG'
+        ? ((price - openPos.entry_price) / openPos.entry_price) * notional
+        : ((openPos.entry_price - price) / openPos.entry_price) * notional;
+      const netPnl = rawPnl - (notional * 0.0006); // trading fee
+
+      // Update live price
+      await supabase.from('positions')
+        .update({ current_price: price, unrealized_pnl: netPnl })
+        .eq('id', openPos.id);
+
+      let shouldExit = false, exitReason = '';
+      if (openPos.side === 'LONG'  && price <= openPos.stop_loss)  { shouldExit = true; exitReason = 'Stop Loss'; }
+      if (openPos.side === 'SHORT' && price >= openPos.stop_loss)  { shouldExit = true; exitReason = 'Stop Loss'; }
+      if (openPos.side === 'LONG'  && price >= openPos.take_profit){ shouldExit = true; exitReason = 'Take Profit'; }
+      if (openPos.side === 'SHORT' && price <= openPos.take_profit){ shouldExit = true; exitReason = 'Take Profit'; }
+      if (openPos.side === 'LONG'  && signal.signal.includes('SHORT') && signal.confidence >= 70) { shouldExit = true; exitReason = 'Signal Reversal'; }
+      if (openPos.side === 'SHORT' && signal.signal.includes('LONG')  && signal.confidence >= 70) { shouldExit = true; exitReason = 'Signal Reversal'; }
+
+      if (shouldExit) {
+        const newBalance = state.balance + margin + netPnl;
+        await supabase.from('positions').update({ status: 'CLOSED', exit_price: price }).eq('id', openPos.id);
+        await supabase.from('trade_history').insert({
+          type: 'CLOSE', side: openPos.side,
+          entry_price: openPos.entry_price, exit_price: price,
+          margin, leverage: 20,
+          net_pnl: netPnl, pnl_percent: (netPnl / margin) * 100, reason: exitReason
+        });
+        await supabase.from('trading_state').update({
+          balance: newBalance,
+          total_trades: (state.total_trades || 0) + 1,
+          winning_trades: netPnl > 0 ? (state.winning_trades || 0) + 1 : (state.winning_trades || 0),
+          max_drawdown: Math.max(state.max_drawdown || 0, Math.max(0, (state.initial_balance - newBalance) / state.initial_balance * 100)),
+          last_trade_time: now
+        }).eq('id', 'main');
+        log.actions.push({ type: 'CLOSE', reason: exitReason, pnl: netPnl.toFixed(2) });
+      } else {
+        log.actions.push({ type: 'HOLD', unrealizedPnl: netPnl.toFixed(2) });
+      }
+
+    } else if (!openPos && !onCooldown && signal.confidence >= 65 && !signal.signal.includes('NEUTRAL')) {
+      // 4. Open new position
+      const isLong = signal.signal.includes('LONG');
+      const margin = (state.balance || DEFAULT_STATE.balance) * 0.95;
+
+      if (margin > 10) {
+        const posId = `pos_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        await supabase.from('positions').insert({
+          id: posId,
+          side: isLong ? 'LONG' : 'SHORT',
+          entry_price: consensus.consensusPrice,
+          current_price: consensus.consensusPrice,
+          margin, leverage: 20,
+          stop_loss: signal.stopLoss,
+          take_profit: signal.takeProfit,
+          unrealized_pnl: 0,
+          status: 'OPEN',
+          entry_time: now,
+          confidence: signal.confidence,
+          signal_score: signal.score
+        });
+        await supabase.from('trade_history').insert({
+          type: 'OPEN',
+          side: isLong ? 'LONG' : 'SHORT',
+          entry_price: consensus.consensusPrice,
+          margin, leverage: 20,
+          reason: `${signal.signal} @ ${signal.confidence}% confidence`
+        });
+        await supabase.from('trading_state').update({
+          balance: (state.balance || DEFAULT_STATE.balance) - margin,
+          last_trade_time: now
+        }).eq('id', 'main');
+        log.actions.push({ type: 'OPEN', side: isLong ? 'LONG' : 'SHORT', confidence: signal.confidence, entry: consensus.consensusPrice });
+      } else {
+        log.actions.push({ type: 'SKIPPED', reason: 'Insufficient balance' });
+      }
+
+    } else {
+      if (onCooldown)  log.actions.push({ type: 'COOLDOWN' });
+      else if (openPos) log.actions.push({ type: 'HOLD_EXISTING' });
+      else             log.actions.push({ type: 'WAITING', confidence: signal.confidence });
+    }
+
+    // 5. Log market snapshot (best effort)
+    supabase.from('market_snapshots').insert({
+      btc_consensus_price: consensus.consensusPrice,
+      btc_coinbase_price: (consensus.allPrices || []).find(p => p.exchange === 'Coinbase')?.price,
+      btc_binance_price: (consensus.allPrices || []).find(p => p.exchange === 'Binance')?.price,
+      spread_percent: consensus.spread,
+      source: 'multi_exchange_consensus'
+    }).then(() => {}).catch(() => {}); // fire and forget
+
+    res.status(200).json({ ...log, executionTime: Date.now() - log.timestamp });
+
+  } catch (err) {
+    console.error('Evaluate error:', err);
+    log.errors.push(err.message);
+    res.status(500).json({ error: err.message, log });
+  }
 }
