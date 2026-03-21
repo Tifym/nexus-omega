@@ -1,134 +1,186 @@
-import { marketFeed } from './_utils/market.js';
-import { signalEngine } from './_utils/signals.js';
-import { createClient } from '@supabase/supabase-js';
+-- ============================================================
+-- NEXUS OMEGA - Complete Database Schema + Stored Procedures
+-- ============================================================
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+-- 1. TRADING STATE
+CREATE TABLE IF NOT EXISTS trading_state (
+  id TEXT PRIMARY KEY DEFAULT 'main',
+  balance NUMERIC NOT NULL DEFAULT 2050.75,
+  initial_balance NUMERIC NOT NULL DEFAULT 2050.75,
+  total_trades INTEGER NOT NULL DEFAULT 0,
+  winning_trades INTEGER NOT NULL DEFAULT 0,
+  max_drawdown NUMERIC NOT NULL DEFAULT 0,
+  last_trade_time BIGINT DEFAULT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-export default async function handler(req, res) {
-  try {
-    const consensus = await marketFeed.getConsensusPrice('BTC');
-    const signal = await signalEngine.generateSignal();
+-- 2. POSITIONS
+CREATE TABLE IF NOT EXISTS positions (
+  id TEXT PRIMARY KEY,
+  side TEXT NOT NULL CHECK (side IN ('LONG','SHORT')),
+  symbol TEXT DEFAULT 'BTC-USD',
+  entry_price NUMERIC NOT NULL,
+  current_price NUMERIC,
+  exit_price NUMERIC,
+  quantity NUMERIC,
+  notional NUMERIC,
+  margin NUMERIC,
+  leverage INTEGER NOT NULL DEFAULT 20,
+  stop_loss NUMERIC,
+  take_profit NUMERIC,
+  entry_fee NUMERIC DEFAULT 0,
+  unrealized_pnl NUMERIC DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED')),
+  entry_time BIGINT,
+  exit_time BIGINT,
+  signal_score NUMERIC,
+  confidence NUMERIC,
+  reasons JSONB,
+  data_sources JSONB,
+  breakeven_moved BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-    const { data: state } = await supabase.from('trading_state').select('*').eq('id', 'main').single();
-    const { data: position } = await supabase.from('positions').select('*').eq('status', 'OPEN').maybeSingle();
-    const { data: lastTrade } = await supabase.from('trade_history').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle();
+-- 3. TRADE HISTORY
+CREATE TABLE IF NOT EXISTS trade_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type TEXT NOT NULL CHECK (type IN ('OPEN','CLOSE')),
+  side TEXT CHECK (side IN ('LONG','SHORT')),
+  entry_price NUMERIC,
+  exit_price NUMERIC,
+  margin NUMERIC,
+  notional NUMERIC,
+  leverage INTEGER DEFAULT 20,
+  net_pnl NUMERIC DEFAULT 0,
+  pnl_percent NUMERIC DEFAULT 0,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-    const cooldownActive = state.last_trade_time && (Date.now() - state.last_trade_time) < (5 * 60 * 1000);
-    const cooldownRemaining = cooldownActive ? Math.ceil((5 * 60 * 1000 - (Date.now() - state.last_trade_time)) / 1000 / 60) : 0;
+-- 4. MARKET SNAPSHOTS (used by evaluate.js)
+CREATE TABLE IF NOT EXISTS market_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  btc_consensus_price NUMERIC,
+  btc_binance_price NUMERIC,
+  btc_coinbase_price NUMERIC,
+  btc_bybit_price NUMERIC,
+  btc_okx_price NUMERIC,
+  btc_kraken_price NUMERIC,
+  spread_percent NUMERIC,
+  source TEXT DEFAULT 'multi_exchange_consensus',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-    let tradeExecuted = null;
-    let currentPosition = position;
-    let tradeAction = null;
+-- ============================================================
+-- RPC STORED PROCEDURES
+-- ============================================================
 
-    // 1. Position Check (Exits)
-    if (position && consensus && consensus.consensusPrice) {
-      const price = consensus.consensusPrice;
-      const unrealizedPnl = position.side === 'LONG' 
-        ? ((price - position.entry_price) / position.entry_price) * position.margin
-        : ((position.entry_price - price) / position.entry_price) * position.margin;
+-- open_position
+CREATE OR REPLACE FUNCTION open_position(
+  _id TEXT, _side TEXT, _symbol TEXT, _entry_price NUMERIC,
+  _quantity NUMERIC, _notional NUMERIC, _leverage INTEGER, _margin NUMERIC,
+  _stop_loss NUMERIC, _take_profit NUMERIC, _entry_time BIGINT, _entry_fee NUMERIC,
+  _signal_score NUMERIC, _confidence NUMERIC, _reasons JSONB,
+  _data_sources JSONB, _consensus_price NUMERIC
+) RETURNS VOID AS $$
+BEGIN
+  INSERT INTO positions (id, side, symbol, entry_price, current_price, quantity, notional,
+    leverage, margin, stop_loss, take_profit, entry_time, entry_fee, signal_score,
+    confidence, reasons, data_sources, status)
+  VALUES (_id, _side, _symbol, _entry_price, _consensus_price, _quantity, _notional,
+    _leverage, _margin, _stop_loss, _take_profit, _entry_time, _entry_fee, _signal_score,
+    _confidence, _reasons, _data_sources, 'OPEN');
 
-      await supabase.from('positions').update({ unrealized_pnl: unrealizedPnl, current_price: price }).eq('id', position.id);
-      
-      let shouldExit = false;
-      let exitReason = '';
+  UPDATE trading_state
+  SET balance = balance - _margin,
+      last_trade_time = _entry_time,
+      updated_at = NOW()
+  WHERE id = 'main';
 
-      if (position.side === 'LONG' && price <= position.stop_loss) { shouldExit = true; exitReason = 'Stop Loss'; }
-      else if (position.side === 'SHORT' && price >= position.stop_loss) { shouldExit = true; exitReason = 'Stop Loss'; }
-      else if (position.side === 'LONG' && price >= position.take_profit) { shouldExit = true; exitReason = 'Take Profit'; }
-      else if (position.side === 'SHORT' && price <= position.take_profit) { shouldExit = true; exitReason = 'Take Profit'; }
-      // Dynamic early exit via signal reversal
-      else if (position.side === 'LONG' && signal.signal.includes('SHORT') && signal.confidence >= 65) { shouldExit = true; exitReason = 'Signal Reversal'; }
-      else if (position.side === 'SHORT' && signal.signal.includes('LONG') && signal.confidence >= 65) { shouldExit = true; exitReason = 'Signal Reversal'; }
+  INSERT INTO trade_history (type, side, entry_price, margin, notional, leverage, reason)
+  VALUES ('OPEN', _side, _entry_price, _margin, _notional, _leverage,
+    'Signal: ' || _signal_score::TEXT || ' (' || _confidence::TEXT || '% confidence)');
+END;
+$$ LANGUAGE plpgsql;
 
-      if (shouldExit) {
-        const netPnl = unrealizedPnl - (position.margin * 0.001); // 0.1% fee
-        const newBalance = state.balance + position.margin + netPnl;
-        
-        await supabase.from('positions').update({ status: 'CLOSED', exit_price: price }).eq('id', position.id);
-        
-        const newTrade = {
-          type: 'CLOSE', side: position.side, entry_price: position.entry_price, exit_price: price,
-          margin: position.margin, leverage: position.leverage, net_pnl: netPnl, 
-          pnl_percent: (netPnl / position.margin) * 100, reason: exitReason
-        };
-        const { data: insertedTrade } = await supabase.from('trade_history').insert(newTrade).select().single();
-        
-        await supabase.from('trading_state').update({
-          balance: newBalance,
-          total_trades: state.total_trades + 1,
-          winning_trades: netPnl > 0 ? state.winning_trades + 1 : state.winning_trades,
-          last_trade_time: Date.now(),
-          max_drawdown: Math.max(state.max_drawdown, ((state.initial_balance - newBalance) / state.initial_balance * 100))
-        }).eq('id', 'main');
+-- close_position
+CREATE OR REPLACE FUNCTION close_position(
+  _position_id TEXT, _exit_price NUMERIC, _exit_time BIGINT,
+  _exit_fee NUMERIC, _reason TEXT, _consensus_price NUMERIC, _exchanges_data JSONB
+) RETURNS TABLE(net_pnl NUMERIC, pnl_percent NUMERIC, balance_after NUMERIC) AS $$
+DECLARE
+  pos positions%ROWTYPE;
+  _raw_pnl NUMERIC;
+  _net_pnl NUMERIC;
+  _pnl_pct NUMERIC;
+  _new_balance NUMERIC;
+  _state trading_state%ROWTYPE;
+BEGIN
+  SELECT * INTO pos FROM positions WHERE id = _position_id;
+  SELECT * INTO _state FROM trading_state WHERE id = 'main';
 
-        tradeExecuted = insertedTrade;
-        currentPosition = null;
-        tradeAction = 'CLOSE';
-      }
-    }
+  IF pos.side = 'LONG' THEN
+    _raw_pnl := ((_exit_price - pos.entry_price) / pos.entry_price) * pos.notional;
+  ELSE
+    _raw_pnl := ((pos.entry_price - _exit_price) / pos.entry_price) * pos.notional;
+  END IF;
 
-    // 2. Signal Check (Entries)
-    if (!currentPosition && !cooldownActive && signal.confidence >= 65 && !signal.signal.includes('NEUTRAL')) {
-      const isLong = signal.signal.includes('LONG');
-      const entryPrice = signal.price;
-      const margin = state.balance * 0.95; // 95% of balance
-      if (margin > 10) {
-        const entryFee = margin * 0.001;
-        const newPosition = {
-          side: isLong ? 'LONG' : 'SHORT',
-          entry_price: entryPrice,
-          current_price: entryPrice,
-          margin: margin,
-          leverage: 20,
-          stop_loss: signal.stopLoss,
-          take_profit: signal.takeProfit,
-          data_sources: { signalScore: signal.score, indicators: signal.indicators },
-          status: 'OPEN',
-          entry_time: Date.now(),
-          unrealized_pnl: -entryFee
-        };
+  _net_pnl   := _raw_pnl - pos.entry_fee - _exit_fee;
+  _pnl_pct   := (_net_pnl / pos.margin) * 100;
+  _new_balance := _state.balance + pos.margin + _net_pnl;
 
-        const { data: insertedPosition } = await supabase.from('positions').insert(newPosition).select().single();
-        
-        await supabase.from('trading_state').update({ 
-            balance: state.balance - margin,  // Deduct margin entirely from balance until closed
-            last_trade_time: Date.now()
-        }).eq('id', 'main');
-        
-        const newTrade = {
-          type: 'OPEN', side: newPosition.side, entry_price: entryPrice, margin: margin,
-          leverage: 20, reason: `${signal.signal} Trigger (${signal.confidence}%)`
-        };
-        const { data: insertedTrade } = await supabase.from('trade_history').insert(newTrade).select().single();
-        
-        tradeExecuted = insertedTrade;
-        currentPosition = insertedPosition;
-        tradeAction = 'OPEN';
-      }
-    }
+  UPDATE positions
+  SET status = 'CLOSED', exit_price = _exit_price, exit_time = _exit_time,
+      unrealized_pnl = _net_pnl
+  WHERE id = _position_id;
 
-    // Refresh state if changed
-    const finalState = tradeAction ? (await supabase.from('trading_state').select('*').eq('id', 'main').single()).data : state;
+  UPDATE trading_state
+  SET balance      = _new_balance,
+      total_trades = total_trades + 1,
+      winning_trades = CASE WHEN _net_pnl > 0 THEN winning_trades + 1 ELSE winning_trades END,
+      max_drawdown = GREATEST(max_drawdown, GREATEST(0, (initial_balance - _new_balance) / initial_balance * 100)),
+      last_trade_time = _exit_time,
+      updated_at = NOW()
+  WHERE id = 'main';
 
-    res.status(200).json({
-      signal: {
-        text: signal.signal,
-        confidence: signal.confidence,
-        score: signal.score,
-        indicators: signal.indicators,
-        reasons: signal.reasons,
-        fearGreed: signal.fearGreed,
-        takeProfit: signal.takeProfit,
-        stopLoss: signal.stopLoss,
-        timestamp: signal.timestamp
-      },
-      price: { consensus: consensus.consensusPrice, spread: consensus.spread, exchanges: consensus.allPrices, timestamp: consensus.timestamp, isReal: !consensus.stale },
-      stats: { balance: finalState.balance, initialBalance: finalState.initial_balance, totalTrades: finalState.total_trades, winRate: finalState.total_trades > 0 ? ((finalState.winning_trades / finalState.total_trades) * 100).toFixed(1) : 0, profitLoss: (finalState.balance - finalState.initial_balance).toFixed(2), maxDrawdown: finalState.max_drawdown, hasOpenPosition: !!currentPosition, cooldownActive, cooldownRemaining },
-      position: currentPosition ? { side: currentPosition.side, entryPrice: currentPosition.entry_price, margin: currentPosition.margin, currentPrice: consensus.consensusPrice, unrealizedPnl: currentPosition.unrealized_pnl, stopLoss: currentPosition.stop_loss, takeProfit: currentPosition.take_profit, entryTime: currentPosition.entry_time } : null,
-      lastTrade: tradeExecuted || (lastTrade ? { type: lastTrade.type, side: lastTrade.side, netPnl: lastTrade.net_pnl, pnlPercent: lastTrade.pnl_percent, reason: lastTrade.reason, time: lastTrade.created_at } : null)
-    });
-  } catch (error) {
-    console.error("Status endpoint error:", error);
-    res.status(500).json({ error: error.message });
-  }
-}
+  INSERT INTO trade_history (type, side, entry_price, exit_price, margin, notional,
+    leverage, net_pnl, pnl_percent, reason)
+  VALUES ('CLOSE', pos.side, pos.entry_price, _exit_price, pos.margin, pos.notional,
+    pos.leverage, _net_pnl, _pnl_pct, _reason);
+
+  RETURN QUERY SELECT _net_pnl, _pnl_pct, _new_balance;
+END;
+$$ LANGUAGE plpgsql;
+
+-- move_stop_to_breakeven
+CREATE OR REPLACE FUNCTION move_stop_to_breakeven(
+  _position_id TEXT, _new_stop NUMERIC
+) RETURNS VOID AS $$
+BEGIN
+  UPDATE positions
+  SET stop_loss = _new_stop, breakeven_moved = TRUE
+  WHERE id = _position_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- update_position_prices
+CREATE OR REPLACE FUNCTION update_position_prices(
+  _position_id TEXT, _current_price NUMERIC, _unrealized_pnl NUMERIC
+) RETURNS VOID AS $$
+BEGIN
+  UPDATE positions
+  SET current_price = _current_price, unrealized_pnl = _unrealized_pnl
+  WHERE id = _position_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- SEED INITIAL STATE
+-- ============================================================
+INSERT INTO trading_state (id, balance, initial_balance, total_trades, winning_trades, max_drawdown)
+VALUES ('main', 2050.75, 2050.75, 0, 0, 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- Verify
+SELECT * FROM trading_state;
