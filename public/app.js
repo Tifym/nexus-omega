@@ -314,8 +314,39 @@ class NexusOmegaDashboard {
             }
         }
 
-        // ── 8. Recent Trades ─────────────────────────────────
-        // (fetched via /api/trades periodically if needed)
+        // ── 8. Trade History ─────────────────────────────────
+        const histList = this.el('history-list-container');
+        const trades = data.history || [];
+        this.set('history-count', trades.length + ' trades');
+        if (histList) {
+            if (trades.length === 0) {
+                histList.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No trades yet</div><div class="empty-sub">Waiting for first signal...</div></div>';
+            } else {
+                histList.innerHTML = trades.map((t, i) => {
+                    const isPnlTrade = t.type === 'CLOSE';
+                    const pnlClass   = isPnlTrade ? (t.netPnl >= 0 ? 'profit' : 'loss') : '';
+                    const pnlStr     = isPnlTrade ? ((t.netPnl >= 0 ? '+' : '') + '$' + this.formatPrice(t.netPnl)) : '--';
+                    const dateStr    = t.time ? new Date(t.time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '--';
+                    return `
+                    <div class="history-item ${pnlClass}" style="animation-delay:${i * 0.05}s">
+                        <div class="history-main">
+                            <div class="history-left">
+                                <div class="history-type-row">
+                                    <span class="type-badge ${t.type.toLowerCase()}">${t.type}</span>
+                                    ${t.side ? `<span class="side-badge ${t.side.toLowerCase()}">${t.side}</span>` : ''}
+                                </div>
+                                <div class="history-time">${dateStr}</div>
+                            </div>
+                            <div class="history-right">
+                                <div class="history-pnl ${pnlClass}">${pnlStr}</div>
+                                ${t.reason ? `<div class="history-reason">${t.reason}</div>` : ''}
+                            </div>
+                        </div>
+                        ${t.exitPrice ? `<div class="history-details"><span>Entry: $${this.formatPrice(t.entryPrice)} → Exit: $${this.formatPrice(t.exitPrice)}</span></div>` : ''}
+                    </div>`;
+                }).join('');
+            }
+        }
 
         // ── 9. Sound / Event Tracking ────────────────────────
         if (this.lastState.signalText !== null && data.signal.text !== this.lastState.signalText) {
