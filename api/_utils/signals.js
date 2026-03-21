@@ -322,6 +322,14 @@ class SignalEngine {
           targets: {
               tp1, tp2, stopLoss, liquidationMagnet: null
           },
+          indicators: {
+              rsi: rsi?.toFixed(2),
+              ema20: ema20?.toFixed(2),
+              ema50: ema50?.toFixed(2),
+              macd: macd.hist?.toFixed(4),
+              atr: atr?.toFixed(2),
+              volatility: 'Live'
+          },
           reasons: reasons.slice(0, 8),
           riskFlags,
           timestamp: Date.now()
