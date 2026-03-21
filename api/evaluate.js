@@ -97,7 +97,7 @@ export default async function handler(req, res) {
       if (margin > 10) {
         const posId = `pos_${now}_${Math.random().toString(36).slice(2, 8)}`;
         const notional = margin * 20; // leverage 20x
-        await supabase.from('positions').insert({
+        const { error: insertError } = await supabase.from('positions').insert({
           id: posId,
           side: isLong ? 'LONG' : 'SHORT',
           entry_price: consensus.consensusPrice,
@@ -113,18 +113,25 @@ export default async function handler(req, res) {
           confidence: signal.confidence,
           signal_score: signal.score
         });
-        await supabase.from('trade_history').insert({
+
+        if (insertError) {
+          console.error("Position Insert Failed:", insertError);
+          log.errors.push(`Failed to insert position: ${insertError.message}`);
+          log.actions.push({ type: 'FAILED_OPEN', reason: insertError.message });
+        } else {
+          await supabase.from('trade_history').insert({
           type: 'OPEN',
           side: isLong ? 'LONG' : 'SHORT',
           entry_price: consensus.consensusPrice,
           margin, leverage: 20,
           reason: `${signal.signal} @ ${signal.confidence}% confidence`
         });
-        await supabase.from('trading_state').update({
-          balance: (state.balance || DEFAULT_STATE.balance) - margin,
-          last_trade_time: now
-        }).eq('id', 'main');
-        log.actions.push({ type: 'OPEN', side: isLong ? 'LONG' : 'SHORT', confidence: signal.confidence, entry: consensus.consensusPrice });
+          await supabase.from('trading_state').update({
+            balance: (state.balance || DEFAULT_STATE.balance) - margin,
+            last_trade_time: now
+          }).eq('id', 'main');
+          log.actions.push({ type: 'OPEN', side: isLong ? 'LONG' : 'SHORT', confidence: signal.confidence, entry: consensus.consensusPrice });
+        }
       } else {
         log.actions.push({ type: 'SKIPPED', reason: 'Insufficient balance' });
       }
