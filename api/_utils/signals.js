@@ -1,11 +1,6 @@
 import { marketFeed } from './market.js';
 
 class SignalEngine {
-  constructor() {
-    this.priceHistory = [];
-    this.maxHistory = 100;
-  }
-
   async fetchFearGreedIndex() {
     try {
       const resp = await fetch('https://api.alternative.me/fng/');
@@ -23,38 +18,56 @@ class SignalEngine {
     }
   }
 
-  async fetchHistoricalData() {
+  async fetchCleanKlines() {
     try {
-      // Coinbase unauthenticated timeline feed to bypass Vercel US IP blocks
-      const response = await fetch('https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300');
+      // Fetch exact 15-minute candles from Coinbase for strict timeframe stability (900 seconds)
+      const response = await fetch('https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900');
       const data = await response.json();
       
-      this.priceHistory = data.slice(0, 60).reverse().map(candle => ({
-        price: parseFloat(candle[4]), 
-        timestamp: candle[0] * 1000,
-        spread: 0.1 
+      // Format: [ timestamp, low, high, open, close ] -> Reverse to chronological
+      return data.slice(0, 100).reverse().map(c => ({
+        timestamp: c[0] * 1000,
+        low: parseFloat(c[1]),
+        high: parseFloat(c[2]),
+        open: parseFloat(c[3]),
+        close: parseFloat(c[4])
       }));
     } catch (error) {
-      console.log("Historical data prefill failed:", error);
+      console.log("Historical data fetch failed:", error);
+      return [];
     }
   }
 
   async generateSignal() {
     try {
-      if (this.priceHistory.length < 20) {
-        await this.fetchHistoricalData();
-      }
-
       const consensus = await marketFeed.getConsensusPrice('BTC');
       if (!consensus) throw new Error('Unable to fetch market data');
       
       const fearGreed = await this.fetchFearGreedIndex();
-      
       const currentPrice = consensus.consensusPrice;
-      this.priceHistory.push({ price: currentPrice, timestamp: Date.now(), spread: consensus.spread });
-      if (this.priceHistory.length > this.maxHistory) this.priceHistory.shift();
       
-      const indicators = this.calculateIndicators();
+      const klines = await this.fetchCleanKlines();
+      if (klines.length < 50) throw new Error('Not enough candle data for reliable indicators');
+
+      // Update the tip of the current building candle with real-time price
+      const lastCandle = klines[klines.length - 1];
+      if (Date.now() - lastCandle.timestamp < 900000) {
+        lastCandle.close = currentPrice;
+        lastCandle.high = Math.max(lastCandle.high, currentPrice);
+        lastCandle.low = Math.min(lastCandle.low, currentPrice);
+      }
+
+      const closes = klines.map(k => k.close);
+      
+      const indicators = {
+        rsi: this.calculateRSI(closes, 14),
+        ema20: this.calculateEMA(closes, 20),
+        ema50: this.calculateEMA(closes, 50),
+        ema99: this.calculateEMA(closes, Math.min(closes.length, 99)), // Macro Trend
+        macd: this.calculateMACD(closes),
+        atr: this.calculateATR(klines, 14),
+      };
+
       const signalData = this.calculateSignalScore(indicators, currentPrice, consensus, fearGreed);
       
       return { 
@@ -67,36 +80,6 @@ class SignalEngine {
     } catch (error) {
       return { signal: 'NEUTRAL', confidence: 0, score: 0, error: error.message, isRealData: false, timestamp: Date.now(), reasons: [] };
     }
-  }
-
-  calculateIndicators() {
-    const prices = this.priceHistory.map(h => h.price);
-    if (prices.length < 20) return null;
-    
-    // Simulate Klines for ATR
-    const klines = this.priceHistory.map((h, i, arr) => {
-        if (i === 0) return { high: h.price, low: h.price, close: h.price };
-        const prev = arr[i-1].price;
-        return { 
-            high: Math.max(h.price, prev) * 1.001, 
-            low: Math.min(h.price, prev) * 0.999, 
-            close: h.price 
-        };
-    });
-
-    return {
-      rsi: this.calculateRSI(prices, 14),
-      ema20: this.calculateEMA(prices, 20),
-      ema50: this.calculateEMA(prices, Math.min(50, prices.length)),
-      macd: this.calculateMACD(prices),
-      bb: this.calculateBollingerBands(prices, 20),
-      atr: this.calculateATR(klines, 14),
-      volatility: this.calculateVolatility(prices.slice(-20)),
-      higherHighs: this.detectHigherHighs(prices.slice(-20)),
-      lowerLows: this.detectLowerLows(prices.slice(-20)),
-      support: Math.min(...prices.slice(-20)),
-      resistance: Math.max(...prices.slice(-20))
-    };
   }
 
   calculateRSI(prices, period) {
@@ -122,15 +105,7 @@ class SignalEngine {
   calculateMACD(prices) {
     const ema12 = this.calculateEMA(prices, 12);
     const ema26 = this.calculateEMA(prices, 26);
-    const macdLine = ema12 - ema26;
-    return macdLine;
-  }
-
-  calculateBollingerBands(prices, period) {
-    const slice = prices.slice(-period);
-    const sma = slice.reduce((a, b) => a + b) / period;
-    const stdDev = Math.sqrt(slice.map(p => Math.pow(p - sma, 2)).reduce((a, b) => a + b) / period);
-    return { upper: sma + (stdDev * 2), middle: sma, lower: sma - (stdDev * 2), width: ((stdDev * 4) / sma) * 100 };
+    return ema12 - ema26;
   }
 
   calculateATR(klines, period) {
@@ -146,97 +121,67 @@ class SignalEngine {
     return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
   }
 
-  calculateVolatility(prices) {
-    if (!prices || prices.length < 2) return 0;
-    const returns = [];
-    for (let i = 1; i < prices.length; i++) {
-        returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
-    }
-    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / returns.length;
-    return Math.sqrt(variance) * Math.sqrt(365 * 96) * 100;
-  }
-
-  detectHigherHighs(prices) {
-    let highs = 0;
-    for (let i = 2; i < prices.length; i++) {
-        if (prices[i] > prices[i-1] && prices[i-1] > prices[i-2]) highs++;
-    }
-    return highs >= 3;
-  }
-
-  detectLowerLows(prices) {
-    let lows = 0;
-    for (let i = 2; i < prices.length; i++) {
-        if (prices[i] < prices[i-1] && prices[i-1] < prices[i-2]) lows++;
-    }
-    return lows >= 3;
-  }
-
   calculateSignalScore(indicators, currentPrice, consensus, fearGreed) {
     if (!indicators) return { signal: 'NEUTRAL', confidence: 0, score: 0, reasons: [] };
     
     let score = 0;
     const reasons = [];
 
-    if (indicators.rsi < 30) { score += 25; reasons.push(`RSI Oversold (${indicators.rsi.toFixed(1)})`); }
-    else if (indicators.rsi < 40) { score += 15; reasons.push(`RSI Low (${indicators.rsi.toFixed(1)})`); }
-    else if (indicators.rsi > 70) { score -= 25; reasons.push(`RSI Overbought (${indicators.rsi.toFixed(1)})`); }
-    else if (indicators.rsi > 60) { score -= 15; reasons.push(`RSI High (${indicators.rsi.toFixed(1)})`); }
+    // 1. MUST align with Macro Trend (15m EMA 99)
+    const isMacroBullish = indicators.ema50 > indicators.ema99;
+    const isMacroBearish = indicators.ema50 < indicators.ema99;
 
-    if (indicators.ema20 > indicators.ema50 && currentPrice > indicators.ema20) {
-      score += 20; reasons.push('Bullish EMA Trend (20>50)');
-    } else if (indicators.ema20 < indicators.ema50 && currentPrice < indicators.ema20) {
-      score -= 20; reasons.push('Bearish EMA Trend (20<50)');
-    }
+    if (isMacroBullish) { score += 20; reasons.push('Macro Trend Bullish (EMA50 > EMA99)'); }
+    if (isMacroBearish) { score -= 20; reasons.push('Macro Trend Bearish (EMA50 < EMA99)'); }
 
-    if (indicators.macd > 0 && indicators.macd > this.calculateMACD(this.priceHistory.map(h=>h.price).slice(0, -1))) {
-        score += 15; reasons.push('MACD Bullish Crossover');
-    } else if (indicators.macd < 0 && indicators.macd < this.calculateMACD(this.priceHistory.map(h=>h.price).slice(0, -1))) {
-        score -= 15; reasons.push('MACD Bearish Crossover');
-    }
+    // 2. Micro Trend Confirmation
+    if (indicators.ema20 > indicators.ema50) { score += 15; reasons.push('Micro Trend Confirmation (EMA20 > 50)'); }
+    else if (indicators.ema20 < indicators.ema50) { score -= 15; reasons.push('Micro Trend Confirmation (EMA20 < 50)'); }
 
-    if (currentPrice < indicators.bb.lower) { score += 15; reasons.push('Price Below Lower Band'); }
-    else if (currentPrice > indicators.bb.upper) { score -= 15; reasons.push('Price Above Upper Band'); }
+    // 3. Momentum (RSI) - Look for value entries
+    if (indicators.rsi > 30 && indicators.rsi < 50) { score += 15; reasons.push(`RSI Bullish Rebound (${indicators.rsi.toFixed(1)})`); }
+    else if (indicators.rsi < 70 && indicators.rsi > 50) { score -= 15; reasons.push(`RSI Bearish Rejection (${indicators.rsi.toFixed(1)})`); }
 
-    if (indicators.higherHighs && !indicators.lowerLows) { score += 15; reasons.push('Higher Highs Pattern'); }
-    else if (indicators.lowerLows && !indicators.higherHighs) { score -= 15; reasons.push('Lower Lows Pattern'); }
+    // 4. MACD Trajectory
+    if (indicators.macd > 0) { score += 15; reasons.push('MACD Positive Bias'); }
+    else { score -= 15; reasons.push('MACD Negative Bias'); }
 
-    const distanceToSupport = ((currentPrice - indicators.support) / indicators.support) * 100;
-    const distanceToResistance = ((indicators.resistance - currentPrice) / currentPrice) * 100;
-    
-    if (distanceToSupport < 2 && distanceToResistance > 5) { score += 10; reasons.push('Near Support'); }
-    else if (distanceToResistance < 2 && distanceToSupport > 5) { score -= 10; reasons.push('Near Resistance'); }
-
-    const fearGreedValue = fearGreed?.value || 50;
-    if (fearGreedValue < 25) { score += 10; reasons.push('Extreme Fear (Contrarian)'); }
-    else if (fearGreedValue > 75) { score -= 10; reasons.push('Extreme Greed (Contrarian)'); }
-
-    if (indicators.volatility > 5) { score *= 0.8; reasons.push('High Volatility Warning'); }
+    // 5. Sentiment
+    const fg = fearGreed?.value || 50;
+    if (fg < 30) { score += 10; reasons.push('High Fear (Buy Support)'); }
+    else if (fg > 70) { score -= 10; reasons.push('High Greed (Sell Pressure)'); }
 
     let signal;
-    const confluenceCount = reasons.length;
-    let confidence = Math.min(95, Math.max(50, 50 + Math.abs(score) * 0.5 + confluenceCount * 3));
-    
-    if (score >= 50) { signal = 'STRONG_LONG'; }
-    else if (score >= 25) { signal = 'LONG'; }
-    else if (score <= -50) { signal = 'STRONG_SHORT'; }
-    else if (score <= -25) { signal = 'SHORT'; }
-    else { signal = 'NEUTRAL'; confidence = Math.max(30, confidence - 20); }
+    // Calculate raw confidence multiplier 
+    let confidence = 50 + (Math.abs(score) * 0.45) + (reasons.length * 2);
 
-    // Calculate dynamic SL/TP
+    // Strict Execution Gate: Only trade if Macro Trend matches Micro Trend to avoid fakeouts
+    if (score >= 40 && isMacroBullish && currentPrice > indicators.ema99) { 
+      signal = 'LONG'; 
+    }
+    else if (score <= -40 && isMacroBearish && currentPrice < indicators.ema99) { 
+      signal = 'SHORT'; 
+    }
+    else { 
+      signal = 'NEUTRAL'; 
+      confidence = Math.max(0, confidence - 30); // Heavily penalize confidence on choppy markets
+    }
+
+    confidence = Math.min(95, Math.max(0, confidence));
+
+    // DYNAMIC PROFIT TARGETS: 1:2 Risk/Reward Ratio based on real Market Volume
+    const atrValue = indicators.atr || (currentPrice * 0.005); 
     let stopLoss = 0, takeProfit = 0;
-    const atrMultiplier = indicators.atr ? (indicators.atr / currentPrice * 100) : 2.5; 
-    
-    if (signal.includes('LONG')) {
-      stopLoss = currentPrice * (1 - Math.max(atrMultiplier * 1.5, 2.5) / 100);
-      takeProfit = currentPrice * (1 + 5.0 / 100); // 5% target
-    } else if (signal.includes('SHORT')) {
-      stopLoss = currentPrice * (1 + Math.max(atrMultiplier * 1.5, 2.5) / 100);
-      takeProfit = currentPrice * (1 - 5.0 / 100); 
+
+    if (signal === 'LONG') {
+      stopLoss = currentPrice - (atrValue * 1.5); // Allow 1.5 ATR breathing room
+      takeProfit = currentPrice + (atrValue * 3.0); // Target 3.0 ATR profit
+    } else if (signal === 'SHORT') {
+      stopLoss = currentPrice + (atrValue * 1.5);
+      takeProfit = currentPrice - (atrValue * 3.0);
     } else {
-      stopLoss = currentPrice * 0.975;
-      takeProfit = currentPrice * 1.05;
+      stopLoss = currentPrice * 0.98;
+      takeProfit = currentPrice * 1.02;
     }
 
     return {
@@ -247,10 +192,10 @@ class SignalEngine {
           ema50: indicators.ema50?.toFixed(2), 
           macd: indicators.macd?.toFixed(4), 
           atr: indicators.atr?.toFixed(2),
-          volatility: indicators.volatility?.toFixed(2)
+          volatility: 'Live'
       },
       reasons: reasons.slice(0, 6), 
-      fearGreed: fearGreedValue,
+      fearGreed: fg,
       stopLoss, takeProfit,
       spread: consensus.spread, exchangesActive: consensus.exchangesUsed
     };

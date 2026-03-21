@@ -65,8 +65,6 @@ export default async function handler(req, res) {
       if (openPos.side === 'SHORT' && price >= openPos.stop_loss)  { shouldExit = true; exitReason = 'Stop Loss'; }
       if (openPos.side === 'LONG'  && price >= openPos.take_profit){ shouldExit = true; exitReason = 'Take Profit'; }
       if (openPos.side === 'SHORT' && price <= openPos.take_profit){ shouldExit = true; exitReason = 'Take Profit'; }
-      if (openPos.side === 'LONG'  && signal.signal.includes('SHORT') && signal.confidence >= 70) { shouldExit = true; exitReason = 'Signal Reversal'; }
-      if (openPos.side === 'SHORT' && signal.signal.includes('LONG')  && signal.confidence >= 70) { shouldExit = true; exitReason = 'Signal Reversal'; }
 
       if (shouldExit) {
         const newBalance = state.balance + margin + netPnl;
