@@ -103,8 +103,8 @@ export default async function handler(req, res) {
           margin,
           notional,
           leverage: 20,
-          stop_loss: signal.stopLoss,
-          take_profit: signal.takeProfit,
+          stop_loss: signal.targets.stopLoss,
+          take_profit: signal.targets.tp2,
           unrealized_pnl: 0,
           status: 'OPEN',
           entry_time: now,
@@ -122,7 +122,7 @@ export default async function handler(req, res) {
           side: isLong ? 'LONG' : 'SHORT',
           entry_price: consensus.consensusPrice,
           margin, leverage: 20,
-          reason: `${signal.signal} @ ${signal.confidence}% confidence`
+          reason: `${signal.signal} | Conf: ${signal.confidence}% | Rgm: ${signal.regime || 'UNK'} | Flags: ${(signal.riskFlags || []).join(',')}`
         });
           await supabase.from('trading_state').update({
             balance: (state.balance || DEFAULT_STATE.balance) - margin,

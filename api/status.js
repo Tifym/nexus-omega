@@ -53,8 +53,8 @@ export default async function handler(req, res) {
         indicators: signal.indicators || {},
         reasons:    signal.reasons || [],
         fearGreed:  signal.fearGreed || 50,
-        stopLoss:   signal.stopLoss  || 0,
-        takeProfit: signal.takeProfit || 0,
+        stopLoss:   (signal.targets && signal.targets.stopLoss) || 0,
+        takeProfit: (signal.targets && signal.targets.tp2) || 0,
         timestamp:  signal.timestamp  || now
       },
       price: {
