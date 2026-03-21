@@ -8,11 +8,11 @@
                   { "src": "/(.*)", "dest": "/api/index.js" }
         ],
         "crons": [
-                  { "path": "/api/evaluate", "schedule": "0 0 * * *" }
+                  { "path": "/api/evaluate", "schedule": "*/5 * * * *" }
         ],
         "functions": {
                   "api/*.js": {
-                              "maxDuration": 10
+                              "maxDuration": 30
                   }
         }
 }

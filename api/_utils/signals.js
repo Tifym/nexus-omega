@@ -222,7 +222,7 @@ class SignalEngine {
     else if (score >= 25) { signal = 'LONG'; }
     else if (score <= -50) { signal = 'STRONG_SHORT'; }
     else if (score <= -25) { signal = 'SHORT'; }
-    else { signal = 'NEUTRAL'; Math.max(30, confidence - 20); }
+    else { signal = 'NEUTRAL'; confidence = Math.max(30, confidence - 20); }
 
     // Calculate dynamic SL/TP
     let stopLoss = 0, takeProfit = 0;

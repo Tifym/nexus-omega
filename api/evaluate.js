@@ -33,13 +33,16 @@ export default async function handler(req, res) {
       await supabase.from('trading_state').upsert({ id: 'main', ...DEFAULT_STATE });
     }
 
-    const { data: openPos } = await supabase
-      .from('positions').select('*').eq('status', 'OPEN').maybeSingle();
+    // Use limit(1) so we still get a result even if multiple OPEN rows exist (shouldn't happen, but defensive)
+    const { data: openPosArr } = await supabase
+      .from('positions').select('*').eq('status', 'OPEN').order('entry_time', { ascending: false }).limit(1);
+    const openPos = openPosArr?.[0] ?? null;
 
     const now = Date.now();
-    const lastTime = state.last_trade_time ? Number(state.last_trade_time) : 0;
+    // Defensively parse last_trade_time — Supabase may return it as a string or bigint
+    const lastTime = state.last_trade_time ? Number(String(state.last_trade_time)) : 0;
     const cooldownMs = 5 * 60 * 1000;
-    const onCooldown = lastTime && (now - lastTime) < cooldownMs;
+    const onCooldown = lastTime > 0 && (now - lastTime) < cooldownMs;
 
     // 3. Check exits on open position
     if (openPos && consensus.consensusPrice) {
@@ -93,12 +96,15 @@ export default async function handler(req, res) {
 
       if (margin > 10) {
         const posId = `pos_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        const notional = margin * 20; // leverage 20x
         await supabase.from('positions').insert({
           id: posId,
           side: isLong ? 'LONG' : 'SHORT',
           entry_price: consensus.consensusPrice,
           current_price: consensus.consensusPrice,
-          margin, leverage: 20,
+          margin,
+          notional,
+          leverage: 20,
           stop_loss: signal.stopLoss,
           take_profit: signal.takeProfit,
           unrealized_pnl: 0,
