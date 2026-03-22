@@ -434,7 +434,7 @@ class SignalEngine {
 
       // 5. Calculate Final Confidence
       confidence += Math.abs(finalScore) * 0.3 + (reasons.length * 1.5);
-      if (source === 'coinbase') confidence -= 20; // Fallback penalty
+      if (source === 'coinbase') confidence -= 10; // Fallback penalty
 
       if (signal === 'NEUTRAL') confidence = Math.max(0, confidence - 30);
       confidence = Math.min(85, Math.max(0, confidence)); // Hard Cap at 85%
