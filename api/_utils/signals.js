@@ -72,7 +72,7 @@ class SignalEngineV5_1 {
     }
     if (macdLine.length === 0) return { macd: 0, signal: 0, hist: 0, histArray: [] };
     let signalLine = macdLine.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
-    const histArray = [];
+    const histArray = new Array(35).fill(0);
     for (let i = 9; i < macdLine.length; i++) {
         signalLine = (macdLine[i] - signalLine) * k9 + signalLine;
         histArray.push(macdLine[i] - signalLine);
@@ -277,7 +277,7 @@ class SignalEngineV5_1 {
       } catch(e) { return flowCache.liq.data || { longLiq: 0, shortLiq: 0, magnet: null, valid: false }; }
   }
 
-  detectRegime(adx, atr, bbWidth, currentPrice, smas) {
+  detectRegime(adx, atr, bbWidth, currentPrice) {
       if (adx > 35) return 'STRONG_TREND';
       if (adx > 25 && bbWidth > 0.05) return 'TRENDING';
       if (adx < 20 && bbWidth < 0.03) return 'TIGHT_RANGE';
@@ -335,7 +335,7 @@ class SignalEngineV5_1 {
           const volSMA = this.calculateSMA(volumes, 20);
           const relativeVol = volumes[volumes.length-1] / (volSMA || 1);
 
-          let regime = this.detectRegime(adx, atr, bb.width, currentPrice, { ema20, ema50 });
+          let regime = this.detectRegime(adx, atr, bb.width, currentPrice);
           let rawScore = 0;
           const reasons = [];
           const riskFlags = [];
@@ -368,6 +368,11 @@ class SignalEngineV5_1 {
               }
           }
 
+          if (oiData.valid) {
+              if (oiData.changePercent > 0.5 && rsi > 50) { rawScore += 15; reasons.push("OI Rising confirming trend"); }
+              else if (oiData.changePercent < -0.5 && rsi > 50) { rawScore -= 15; reasons.push("OI Falling (Squeeze risk)"); }
+          }
+
           if (lsData.valid) {
               if (lsData.ratio > 2.0) { rawScore -= 15; reasons.push("Longs Crowded (L/S Ratio High)"); }
               else if (lsData.ratio < 0.8) { rawScore += 15; reasons.push("Shorts Crowded (L/S Ratio Low)"); }
@@ -375,12 +380,12 @@ class SignalEngineV5_1 {
 
           let liqImbalance = 'NEUTRAL';
           if (liqData.valid && liqData.longLiq > 0 && liqData.shortLiq > 0) {
-              if (liqData.longLiq > liqData.shortLiq * 3) {
+              if (liqData.longLiq > liqData.shortLiq * 2) {
                   liqImbalance = 'LONG_DOMINANT';
-                  if (rsi < 40) { rawScore += 20; reasons.push("Long Liq Exhaustion (Bottom Signal)"); }
-              } else if (liqData.shortLiq > liqData.longLiq * 3) {
+                  if (rsi < 45) { rawScore += 20; reasons.push("Long Liq Exhaustion (Bottom Signal)"); }
+              } else if (liqData.shortLiq > liqData.longLiq * 2) {
                   liqImbalance = 'SHORT_DOMINANT';
-                  if (rsi > 60) { rawScore -= 20; reasons.push("Short Liq Exhaustion (Top Signal)"); }
+                  if (rsi > 55) { rawScore -= 20; reasons.push("Short Liq Exhaustion (Top Signal)"); }
               }
           }
 
@@ -444,14 +449,14 @@ class SignalEngineV5_1 {
               tp1 = currentPrice + (adaptiveAtr * 1.5);
               tp2 = currentPrice + (adaptiveAtr * 3.0);
               // Hide stop below liquidation cluster if one exists nearby (Liquidation-Aware Stops)
-              if (liqData.magnet && liqData.magnet < currentPrice && (currentPrice - liqData.magnet) < adaptiveAtr) {
+              if (liqData.magnet && liqData.magnet < currentPrice && (currentPrice - liqData.magnet) < atr) {
                   stopLoss = liqData.magnet * 0.999; 
               }
           } else if (signal === 'SHORT') {
               stopLoss = currentPrice + adaptiveAtr;
               tp1 = currentPrice - (adaptiveAtr * 1.5);
               tp2 = currentPrice - (adaptiveAtr * 3.0);
-              if (liqData.magnet && liqData.magnet > currentPrice && (liqData.magnet - currentPrice) < adaptiveAtr) {
+              if (liqData.magnet && liqData.magnet > currentPrice && (liqData.magnet - currentPrice) < atr) {
                   stopLoss = liqData.magnet * 1.001; 
               }
           }
@@ -463,7 +468,7 @@ class SignalEngineV5_1 {
               regime,
               marginMultiplier,
               marketStructure: {
-                  fundingRate: flowData.valid ? flowData.rate : null,
+                  fundingRate: fundingData.valid ? fundingData.rate : null,
                   oiChange4h: oiData.valid ? oiData.changePercent.toFixed(2) : null,
                   longShortRatio: lsData.valid ? lsData.ratio.toFixed(2) : null,
                   liqImbalance,
