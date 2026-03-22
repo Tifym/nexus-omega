@@ -10,6 +10,7 @@ const flowCache = {
 class SignalEngineV5_1 {
   constructor() {
     this.failureCount = 0;
+    this.cooldownActive = false;
   }
 
   // --- 1. CORE MATH & INDICATORS ---
@@ -290,7 +291,10 @@ class SignalEngineV5_1 {
       try {
           // Circuit Breaker (3 fails = 1 min cooloff)
           if (this.failureCount >= 3) {
-              setTimeout(() => { this.failureCount = 0; }, 60000);
+              if (!this.cooldownActive) {
+                  this.cooldownActive = true;
+                  setTimeout(() => { this.failureCount = 0; this.cooldownActive = false; }, 60000);
+              }
               return this.fallback("API Cooldown Mode", true);
           }
 
@@ -371,6 +375,7 @@ class SignalEngineV5_1 {
           if (oiData.valid) {
               if (oiData.changePercent > 0.5 && rsi > 50) { rawScore += 15; reasons.push("OI Rising confirming trend"); }
               else if (oiData.changePercent < -0.5 && rsi > 50) { rawScore -= 15; reasons.push("OI Falling (Squeeze risk)"); }
+              else if (oiData.changePercent > 0.5 && rsi < 50) { rawScore -= 15; reasons.push("OI Rising confirming shorts"); }
           }
 
           if (lsData.valid) {
@@ -390,7 +395,7 @@ class SignalEngineV5_1 {
           }
 
           // --- 2. REGIME GATES & TARGETING ---
-          if (regime === 'CHOP') { rawScore = 0; riskFlags.push("Regime Block: Chop"); }
+          if (regime === 'CHOP') { rawScore = 0; reasons.length = 0; riskFlags.push("Regime Block: Chop"); }
           
           let atrMultiplier = 1.5;
           let reqScore = regime === 'STRONG_TREND' ? 50 : 60;
@@ -469,6 +474,7 @@ class SignalEngineV5_1 {
               marginMultiplier,
               marketStructure: {
                   fundingRate: fundingData.valid ? fundingData.rate : null,
+                  fundingRegime,
                   oiChange4h: oiData.valid ? oiData.changePercent.toFixed(2) : null,
                   longShortRatio: lsData.valid ? lsData.ratio.toFixed(2) : null,
                   liqImbalance,
@@ -476,7 +482,7 @@ class SignalEngineV5_1 {
                   poc: volProfile.poc
               },
               targets: { tp1, tp2, stopLoss, liquidationMagnet: liqData.magnet || null },
-              indicators: { rsi: rsi?.toFixed(2), ema20: ema20?.toFixed(2), ema50: ema50?.toFixed(2), macd: macd.hist?.toFixed(4), atr: atr?.toFixed(2), adx: adx?.toFixed(2), bbWidth: bb.width?.toFixed(4) },
+              indicators: { rsi: rsi?.toFixed(2), ema20: ema20?.toFixed(2), ema50: ema50?.toFixed(2), macd: macd.hist?.toFixed(4), atr: atr?.toFixed(2), adx: adx?.toFixed(2), bbWidth: bb.width?.toFixed(4), volatility: `${((atr / currentPrice) * 100).toFixed(2)}%` },
               reasons: reasons.slice(0, 8),
               riskFlags,
               timestamp: Date.now()
