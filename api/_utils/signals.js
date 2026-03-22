@@ -395,7 +395,7 @@ class SignalEngineV5_1 {
           }
 
           // --- 2. REGIME GATES & TARGETING ---
-          if (regime === 'CHOP') { rawScore = 0; reasons.length = 0; riskFlags.push("Regime Block: Chop"); }
+          if (regime === 'CHOP') { rawScore = 0; reasons.length = 0; reasons.push("Market is CHOP (Consolidating)", "Waiting for volatility expansion..."); riskFlags.push("Regime Block: Chop"); }
           
           let atrMultiplier = 1.5;
           let reqScore = regime === 'STRONG_TREND' ? 50 : 60;
