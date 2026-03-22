@@ -1,15 +1,16 @@
 {
-        "version": 2,
-        "routes": [
-                  { "src": "/api/(.*)", "dest": "/api/$1.js" },
-                  { "src": "/sounds/(.*)", "dest": "/public/sounds/$1" },
-                  { "src": "/styles.css", "dest": "/public/styles.css" },
-                  { "src": "/app.js", "dest": "/public/app.js" },
-                  { "src": "/(.*)", "dest": "/api/index.js" }
-        ],
-        "functions": {
-                  "api/*.js": {
-                              "maxDuration": 30
-                  }
-        }
+  "version": 2,
+  "regions": ["fra1"],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1.js" },
+    { "src": "/sounds/(.*)", "dest": "/public/sounds/$1" },
+    { "src": "/styles.css", "dest": "/public/styles.css" },
+    { "src": "/app.js", "dest": "/public/app.js" },
+    { "src": "/(.*)", "dest": "/api/index.js" }
+  ],
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  }
 }
