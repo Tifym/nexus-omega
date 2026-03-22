@@ -87,10 +87,11 @@ export default async function handler(req, res) {
         log.actions.push({ type: 'HOLD', unrealizedPnl: netPnl.toFixed(2) });
       }
 
-    } else if (!openPos && !onCooldown && signal.confidence >= 65 && !signal.signal.includes('NEUTRAL')) {
-      // 4. Open new position
+    } else if (!openPos && !onCooldown && signal.confidence >= 55 && !signal.signal.includes('NEUTRAL')) {
+      // 4. Open new position sized dynamically by V5 Engine
       const isLong = signal.signal.includes('LONG');
-      const margin = (state.balance || DEFAULT_STATE.balance) * 0.95;
+      const marginMult = signal.marginMultiplier || 0.95;
+      const margin = (state.balance || DEFAULT_STATE.balance) * marginMult;
 
       if (margin > 10) {
         const posId = `pos_${now}_${Math.random().toString(36).slice(2, 8)}`;
