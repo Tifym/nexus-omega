@@ -7,7 +7,7 @@ const flowCache = {
     ls: { data: null, timestamp: 0 }
 };
 
-class SignalEngineV5_1 {
+class SignalEngineV5_2 {
   constructor() {
     this.failureCount = 0;
     this.cooldownActive = false;
@@ -37,7 +37,6 @@ class SignalEngineV5_1 {
       }
       let avgGain = gains/period; let avgLoss = losses/period;
       rsis.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
-      
       for(let i = period+1; i < data.length; i++) {
           const change = data[i] - data[i-1];
           let gain = change > 0 ? change : 0;
@@ -73,6 +72,7 @@ class SignalEngineV5_1 {
     }
     if (macdLine.length === 0) return { macd: 0, signal: 0, hist: 0, histArray: [] };
     let signalLine = macdLine.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+    // Pad with 35 zeros so histArray aligns with closes array for divergence detection
     const histArray = new Array(35).fill(0);
     for (let i = 9; i < macdLine.length; i++) {
         signalLine = (macdLine[i] - signalLine) * k9 + signalLine;
@@ -92,7 +92,6 @@ class SignalEngineV5_1 {
         const upMove = curr.high - prev.high; const downMove = prev.low - curr.low;
         let pDM = (upMove > downMove && upMove > 0) ? upMove : 0;
         let mDM = (downMove > upMove && downMove > 0) ? downMove : 0;
-        
         if (i <= period) {
             smoothTR += tr; smoothPDM += pDM; smoothMDM += mDM;
             if (i === period) {
@@ -126,52 +125,43 @@ class SignalEngineV5_1 {
   // --- 2. ALPHA: PROPER FRACTAL DIVERGENCE & VOLUME PROFILE ---
   detectTrueSwings(prices, indicators, lookback = 30) {
       if (prices.length < lookback || indicators.length < lookback) return { type: 'NONE', score: 0 };
-      
       const p = prices.slice(-lookback);
       const ind = indicators.slice(-lookback);
-      
       const getSwingLows = () => {
           let swings = [];
           for (let i = 2; i < p.length - 2; i++) {
-              if (p[i] < p[i-1] && p[i] < p[i-2] && p[i] < p[i+1] && p[i] < p[i+2]) {
+              if (p[i] < p[i-1] && p[i] < p[i-2] && p[i] < p[i+1] && p[i] < p[i+2])
                   swings.push({ idx: i, price: p[i], val: ind[i] });
-              }
           }
           return swings;
       };
-
       const getSwingHighs = () => {
           let swings = [];
           for (let i = 2; i < p.length - 2; i++) {
-              if (p[i] > p[i-1] && p[i] > p[i-2] && p[i] > p[i+1] && p[i] > p[i+2]) {
+              if (p[i] > p[i-1] && p[i] > p[i-2] && p[i] > p[i+1] && p[i] > p[i+2])
                   swings.push({ idx: i, price: p[i], val: ind[i] });
-              }
           }
           return swings;
       };
-
       const lows = getSwingLows();
       if (lows.length >= 2) {
-          const recent = lows[lows.length-1];
-          const prev = lows[lows.length-2];
-          if (recent.price < prev.price && recent.val > prev.val) return { type: 'BULLISH', score: 25 }; 
+          const recent = lows[lows.length-1], prev = lows[lows.length-2];
+          if (recent.price < prev.price && recent.val > prev.val) return { type: 'BULLISH', score: 25 };
       }
-
       const highs = getSwingHighs();
       if (highs.length >= 2) {
-          const recent = highs[highs.length-1];
-          const prev = highs[highs.length-2];
-          if (recent.price > prev.price && recent.val < prev.val) return { type: 'BEARISH', score: -25 }; 
+          const recent = highs[highs.length-1], prev = highs[highs.length-2];
+          if (recent.price > prev.price && recent.val < prev.val) return { type: 'BEARISH', score: -25 };
       }
-
       return { type: 'NONE', score: 0 };
   }
 
   calculateVolumeProfile(klines, lookback = 100, atr = 100) {
-      if (klines.length < 2) return { poc: 0, vah: 0, val: 0, outOfValueArea: false };
+      if (klines.length < 2) return { poc: 0, vah: 0, val: 0 };
       const data = klines.slice(-lookback);
       const buckets = {};
-      const bucketSize = Math.max(50, Math.round(atr * 0.6)); 
+      // Dynamic bucket size: adaptive to current volatility, not fixed $50
+      const bucketSize = Math.max(50, Math.round(atr * 0.6));
       data.forEach(k => {
           const typicalPrice = (k.high + k.low + k.close) / 3;
           const bucket = Math.round(typicalPrice / bucketSize) * bucketSize;
@@ -190,7 +180,10 @@ class SignalEngineV5_1 {
       const res = await fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=300', { signal: ctrl.signal });
       if(!res.ok) throw new Error("Binance Klines fail");
       const data = await res.json();
-      return { klines: data.map(c => ({ timestamp: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) })), price: parseFloat(data[data.length-1][4]), source: 'Binance', weight: 1.0 };
+      return {
+          klines: data.map(c => ({ timestamp: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) })),
+          price: parseFloat(data[data.length-1][4]), source: 'Binance', weight: 1.0
+      };
   }
 
   async fetchBybitKlines() {
@@ -198,6 +191,7 @@ class SignalEngineV5_1 {
       const res = await fetch('https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=300', { signal: ctrl.signal });
       const data = await res.json();
       if(data.retCode !== 0) throw new Error("Bybit error");
+      // Bybit returns newest first — reverse to chronological
       let klines = data.result.list.map(c => ({ timestamp: parseFloat(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) })).reverse();
       return { klines, price: klines[klines.length-1].close, source: 'Bybit', weight: 0.95 };
   }
@@ -207,6 +201,7 @@ class SignalEngineV5_1 {
       const res = await fetch('https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=15m&limit=300', { signal: ctrl.signal });
       const data = await res.json();
       if(data.code !== '0') throw new Error("OKX error");
+      // OKX returns newest first — reverse to chronological
       let klines = data.data.map(c => ({ timestamp: parseFloat(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) })).reverse();
       return { klines, price: klines[klines.length-1].close, source: 'OKX', weight: 0.90 };
   }
@@ -223,7 +218,7 @@ class SignalEngineV5_1 {
 
   async getCachedOI() {
       const now = Date.now();
-      if (flowCache.oi.data && (now - flowCache.oi.timestamp < 300000)) return flowCache.oi.data; // 5 min cache
+      if (flowCache.oi.data && (now - flowCache.oi.timestamp < 300000)) return flowCache.oi.data;
       try {
           const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 3000);
           const res = await fetch('https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=15m&limit=16', { signal: ctrl.signal });
@@ -256,7 +251,7 @@ class SignalEngineV5_1 {
 
   async getCachedLiquidations() {
       const now = Date.now();
-      if (flowCache.liq.data && (now - flowCache.liq.timestamp < 120000)) return flowCache.liq.data; // 2 min cache
+      if (flowCache.liq.data && (now - flowCache.liq.timestamp < 120000)) return flowCache.liq.data;
       try {
           const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 3000);
           const res = await fetch('https://fapi.binance.com/fapi/v1/allForceOrders?symbol=BTCUSDT&limit=100', { signal: ctrl.signal });
@@ -267,8 +262,8 @@ class SignalEngineV5_1 {
           data.forEach(order => {
             if (order.time >= fifteenMinsAgo) {
                 const qty = parseFloat(order.executedQty), price = parseFloat(order.price);
-                if (order.side === 'SELL') longLiq += qty; 
-                if (order.side === 'BUY') shortLiq += qty; 
+                if (order.side === 'SELL') longLiq += qty;
+                if (order.side === 'BUY') shortLiq += qty;
                 if (qty > maxQty) { maxQty = qty; highestLiqPrice = price; }
             }
           });
@@ -286,7 +281,7 @@ class SignalEngineV5_1 {
       return 'CHOP';
   }
 
-  // --- 5. EXECUTION ENGINE v5.1 ---
+  // --- 5. EXECUTION ENGINE v5.2 ---
   async generateSignal() {
       try {
           // Circuit Breaker (3 fails = 1 min cooloff)
@@ -298,33 +293,47 @@ class SignalEngineV5_1 {
               return this.fallback("API Cooldown Mode", true);
           }
 
-          // A. Parallel Fetch
-          const [binance, bybit, okx] = await Promise.allSettled([this.fetchBinanceKlines(), this.fetchBybitKlines(), this.fetchOKXKlines()]);
+          // A. Parallel Fetch all 3 exchanges
+          const [binance, bybit, okx] = await Promise.allSettled([
+              this.fetchBinanceKlines(), this.fetchBybitKlines(), this.fetchOKXKlines()
+          ]);
           const validSources = [binance, bybit, okx].filter(r => r.status === 'fulfilled').map(r => r.value);
-          
+
           if (validSources.length === 0) {
               this.failureCount++;
               return this.fallback("Data Outage - All Exchanges Failed");
           }
           this.failureCount = 0;
 
-          // B. Anomaly Checks
+          // B. Anomaly Check — detect exchange price divergence
           validSources.sort((a,b) => b.weight - a.weight);
-          let primary = validSources[0];
+          const primary = validSources[0];
           let anomalyFlag = false;
           if (validSources.length >= 3) {
               const prices = validSources.map(v => v.price);
               if ((Math.max(...prices) - Math.min(...prices)) / Math.min(...prices) > 0.003) anomalyFlag = true;
           }
 
-          // C. Pull Flow Data
+          // C. Pull Flow Data in parallel
           const [fundingData, oiData, lsData, liqData] = await Promise.all([
               this.fetchFundingRate(), this.getCachedOI(), this.getCachedLSRatio(), this.getCachedLiquidations()
           ]);
 
           const { klines, source, weight, price: currentPrice } = primary;
+
+          // D. Stale data protection — reject candles older than 30 minutes
+          const lastCandleTime = klines[klines.length - 1].timestamp;
+          if (Date.now() - lastCandleTime > 1_800_000) {
+              return this.fallback("Stale market data — candles >30min old");
+          }
+
           const closes = klines.map(k => k.close);
           const volumes = klines.map(k => k.volume);
+
+          // Volume: exclude live candle from baseline SMA, use completed candle for relativeVol
+          const volSMA = this.calculateSMA(volumes.slice(0, -1), 20);
+          const relativeVol = volumes[volumes.length - 1] / (volSMA || 1);
+
           const rsiArray = this.calculateRSIArray(closes, 14);
           const rsi = rsiArray[rsiArray.length - 1];
           const macd = this.calculateMACD(closes);
@@ -332,57 +341,53 @@ class SignalEngineV5_1 {
           const atr = this.calculateATR(klines, 14);
           const bb = this.calculateBollingerBands(closes, 20);
           const volProfile = this.calculateVolumeProfile(klines, 100, atr);
-          
+
           const ema20 = this.calculateEMA(closes, 20);
           const ema50 = this.calculateEMA(closes, 50);
           const trend200 = this.calculateEMA(closes, 200);
-          const volSMA = this.calculateSMA(volumes.slice(0, -1), 20);
-          const relativeVol = Math.max(volumes[volumes.length-1], volumes[volumes.length-2]) / (volSMA || 1);
 
           let regime = this.detectRegime(adx, atr, bb.width, currentPrice);
           let rawScore = 0;
           const reasons = [];
           const riskFlags = [];
 
-          if (anomalyFlag) { riskFlags.push("Exchange Anomaly (>0.3% div)"); }
-          if (validSources.length === 1) { riskFlags.push(`Single Source Only (${source})`); }
+          if (anomalyFlag) riskFlags.push("Exchange Anomaly (>0.3% div)");
+          if (validSources.length === 1) riskFlags.push(`Single Source Only (${source})`);
 
-          // --- 1. BASE RAW SCORE (Trend + Divergence + Structure) ---
-          
-          // Trend Alignment
+          // --- 1. BASE RAW SCORE ---
+
+          // Trend Alignment (30pts)
           if (ema20 > ema50 && ema50 > trend200 && currentPrice > trend200) { rawScore += 30; reasons.push("Macro Bullish Alignment"); }
           if (ema20 < ema50 && ema50 < trend200 && currentPrice < trend200) { rawScore -= 30; reasons.push("Macro Bearish Alignment"); }
 
-          // RSI & MACD Swing Divergence
+          // RSI & MACD Fractal Divergence (25pts each)
           const rsiDiv = this.detectTrueSwings(closes, rsiArray, 20);
           if (rsiDiv.type !== 'NONE') { rawScore += rsiDiv.score; reasons.push(rsiDiv.type === 'BULLISH' ? 'Bullish RSI Divergence' : 'Bearish RSI Divergence'); }
 
           const macdDiv = this.detectTrueSwings(closes, macd.histArray, 20);
           if (macdDiv.type !== 'NONE') { rawScore += macdDiv.score; reasons.push(macdDiv.type === 'BULLISH' ? 'Bullish MACD Divergence' : 'Bearish MACD Divergence'); }
 
-          // Flow Adjustments
+          // Funding Rate
           let fundingRegime = 'NEUTRAL';
           if (fundingData.valid) {
-              if (fundingData.rate > 0.0005) {
-                  fundingRegime = 'OVERHEATED';
-                  rawScore -= 10;
-              } else if (fundingData.rate < -0.0001) {
-                  fundingRegime = 'CROWDED_SHORTS';
-                  rawScore += 15;
-              }
+              if (fundingData.rate > 0.0005) { fundingRegime = 'OVERHEATED'; rawScore -= 10; }
+              else if (fundingData.rate < -0.0001) { fundingRegime = 'CROWDED_SHORTS'; rawScore += 15; }
           }
 
+          // Open Interest (15pts)
           if (oiData.valid) {
               if (oiData.changePercent > 0.5 && rsi > 50) { rawScore += 15; reasons.push("OI Rising confirming trend"); }
               else if (oiData.changePercent < -0.5 && rsi > 50) { rawScore -= 15; reasons.push("OI Falling (Squeeze risk)"); }
               else if (oiData.changePercent > 0.5 && rsi < 50) { rawScore -= 15; reasons.push("OI Rising confirming shorts"); }
           }
 
+          // Long/Short Ratio (15pts)
           if (lsData.valid) {
               if (lsData.ratio > 2.0) { rawScore -= 15; reasons.push("Longs Crowded (L/S Ratio High)"); }
               else if (lsData.ratio < 0.8) { rawScore += 15; reasons.push("Shorts Crowded (L/S Ratio Low)"); }
           }
 
+          // Liquidation Exhaustion (20pts)
           let liqImbalance = 'NEUTRAL';
           if (liqData.valid && liqData.longLiq > 0 && liqData.shortLiq > 0) {
               if (liqData.longLiq > liqData.shortLiq * 2) {
@@ -394,15 +399,29 @@ class SignalEngineV5_1 {
               }
           }
 
+          // Extreme Volume Surge — high volume days now contribute to score (NEW v5.2)
+          if (relativeVol > 3.0) {
+              if (closes[closes.length-1] > closes[closes.length-2]) { rawScore += 10; reasons.push(`Extreme Bull Volume Surge (${relativeVol.toFixed(1)}x avg)`); }
+              else { rawScore -= 10; reasons.push(`Extreme Bear Volume Surge (${relativeVol.toFixed(1)}x avg)`); }
+          }
+
           // --- 2. REGIME GATES & TARGETING ---
-          if (regime === 'CHOP') { rawScore = 0; reasons.length = 0; reasons.push("Market is CHOP (Consolidating)", "Waiting for volatility expansion..."); riskFlags.push("Regime Block: Chop"); }
-          
+          if (regime === 'CHOP') {
+              rawScore = 0;
+              reasons.length = 0;
+              reasons.push("Market is CHOP (Consolidating)", "Waiting for volatility expansion...");
+              riskFlags.push("Regime Block: Chop");
+          }
+
           let atrMultiplier = 1.5;
-          let reqScore = regime === 'STRONG_TREND' ? 50 : 60;
-          
+          // FIX: TRENDING now requires 50 instead of 60 — was silently blocking valid signals
+          let reqScore = (regime === 'STRONG_TREND' || regime === 'TRENDING') ? 50 : 60;
+
           if (regime === 'TIGHT_RANGE') {
               reqScore = 75; atrMultiplier = 1.0;
-              if (rsi < 30) rawScore += 40; else if (rsi > 70) rawScore -= 40; else rawScore = 0;
+              if (rsi < 30) rawScore += 40;
+              else if (rsi > 70) rawScore -= 40;
+              else rawScore = 0;
           }
           if (regime === 'BREAKOUT_IMMINENT') {
               reqScore = 45; atrMultiplier = 2.5;
@@ -410,28 +429,27 @@ class SignalEngineV5_1 {
               else if (currentPrice < bb.lower && relativeVol > 1.5) { rawScore -= 20; reasons.push("Bearish BB Breakout Vol"); }
           }
 
-          // --- 3. APPLY MULTIPLIERS (Volume Penalty / Anomaly) ---
-          if (anomalyFlag) rawScore *= 0.6; // Harsh penalty on score confidence
+          // --- 3. APPLY MULTIPLIERS (must run AFTER all scoring) ---
+          if (anomalyFlag) rawScore *= 0.6;
           if (currentPrice > volProfile.vah && relativeVol > 1.2) { rawScore += 15; reasons.push("VAH Breakout Vol"); }
           if (currentPrice < volProfile.val && relativeVol > 1.2) { rawScore -= 15; reasons.push("VAL Breakdown Vol"); }
           if (relativeVol < 0.6) {
-              rawScore *= 0.5; // Fakeout / Low Vol
+              rawScore *= 0.5;
               riskFlags.push("Fakeout/Low Vol Penalty");
           }
 
-          // --- 4. CHECK FINAL SIGNAL ---
+          // --- 4. FINAL SIGNAL CHECK ---
           let signal = 'NEUTRAL';
           if (rawScore >= reqScore && regime !== 'CHOP') signal = 'LONG';
           else if (rawScore <= -reqScore && regime !== 'CHOP') signal = 'SHORT';
 
-          // Source Multiplier Check
+          // Confidence calculation
           let confidence = (Math.abs(rawScore) * 0.5 + (reasons.length * 2)) * weight;
-          if (validSources.length >= 2 && !anomalyFlag) confidence *= 1.15; // Cross-validated boost
-          if (validSources.length === 1) confidence *= 0.85; // Single source reduction
-
+          if (validSources.length >= 2 && !anomalyFlag) confidence *= 1.15;
+          if (validSources.length === 1) confidence *= 0.85;
           confidence = Math.min(95, Math.max(0, confidence));
 
-          // --- 5. EXECUTION MULTIPLIERS EXACT FIX ---
+          // --- 5. EXECUTION GATE — reject low confidence signals ---
           let marginMultiplier = 0;
           if (signal !== 'NEUTRAL') {
               if (confidence >= 85) marginMultiplier = 0.95;
@@ -445,7 +463,7 @@ class SignalEngineV5_1 {
           }
           if (signal === 'NEUTRAL') confidence = Math.max(0, confidence - 30);
 
-          // Stop Strategy Engine
+          // --- 6. STOP STRATEGY ---
           const adaptiveAtr = (atr || currentPrice * 0.005) * atrMultiplier;
           let stopLoss = currentPrice, tp1 = currentPrice, tp2 = currentPrice;
 
@@ -453,16 +471,16 @@ class SignalEngineV5_1 {
               stopLoss = currentPrice - adaptiveAtr;
               tp1 = currentPrice + (adaptiveAtr * 1.5);
               tp2 = currentPrice + (adaptiveAtr * 3.0);
-              // Hide stop below liquidation cluster if one exists nearby (Liquidation-Aware Stops)
+              // Liquidation-aware stop: hide below nearest liq cluster
               if (liqData.magnet && liqData.magnet < currentPrice && (currentPrice - liqData.magnet) < atr) {
-                  stopLoss = liqData.magnet * 0.999; 
+                  stopLoss = liqData.magnet * 0.999;
               }
           } else if (signal === 'SHORT') {
               stopLoss = currentPrice + adaptiveAtr;
               tp1 = currentPrice - (adaptiveAtr * 1.5);
               tp2 = currentPrice - (adaptiveAtr * 3.0);
               if (liqData.magnet && liqData.magnet > currentPrice && (liqData.magnet - currentPrice) < atr) {
-                  stopLoss = liqData.magnet * 1.001; 
+                  stopLoss = liqData.magnet * 1.001;
               }
           }
 
@@ -482,19 +500,29 @@ class SignalEngineV5_1 {
                   poc: volProfile.poc
               },
               targets: { tp1, tp2, stopLoss, liquidationMagnet: liqData.magnet || null },
-              indicators: { rsi: rsi?.toFixed(2), ema20: ema20?.toFixed(2), ema50: ema50?.toFixed(2), macd: macd.hist?.toFixed(4), atr: atr?.toFixed(2), adx: adx?.toFixed(2), bbWidth: bb.width?.toFixed(4), volatility: `${((atr / currentPrice) * 100).toFixed(2)}%` },
+              indicators: {
+                  rsi: rsi?.toFixed(2),
+                  ema20: ema20?.toFixed(2),
+                  ema50: ema50?.toFixed(2),
+                  macd: macd.hist?.toFixed(4),
+                  atr: atr?.toFixed(2),
+                  adx: adx?.toFixed(2),
+                  bbWidth: bb.width?.toFixed(4),
+                  relativeVol: relativeVol?.toFixed(2),
+                  volatility: `${((atr / currentPrice) * 100).toFixed(2)}%`
+              },
               reasons: reasons.slice(0, 8),
               riskFlags,
               timestamp: Date.now()
           };
       } catch (err) {
-          console.error("Signal Engine v5.1 Exception:", err);
+          console.error("Signal Engine v5.2 Exception:", err);
           return this.fallback(err.message);
       }
   }
 
   fallback(reason, isCooldown = false) {
-      return { 
+      return {
           signal: 'NEUTRAL', confidence: 0, score: 0, regime: 'UNKNOWN', marginMultiplier: 0,
           marketStructure: { fundingRate: null, oiChange4h: null, longShortRatio: null, liqImbalance: 'NEUTRAL', liquidationMagnet: null, poc: 0 },
           targets: { tp1: 0, tp2: 0, stopLoss: 0, liquidationMagnet: null }, indicators: {},
@@ -503,4 +531,4 @@ class SignalEngineV5_1 {
   }
 }
 
-export const signalEngine = new SignalEngineV5_1();
+export const signalEngine = new SignalEngineV5_2();
