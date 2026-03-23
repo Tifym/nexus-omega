@@ -336,8 +336,8 @@ class SignalEngineV5_1 {
           const ema20 = this.calculateEMA(closes, 20);
           const ema50 = this.calculateEMA(closes, 50);
           const trend200 = this.calculateEMA(closes, 200);
-          const volSMA = this.calculateSMA(volumes, 20);
-          const relativeVol = volumes[volumes.length-1] / (volSMA || 1);
+          const volSMA = this.calculateSMA(volumes.slice(0, -1), 20);
+          const relativeVol = Math.max(volumes[volumes.length-1], volumes[volumes.length-2]) / (volSMA || 1);
 
           let regime = this.detectRegime(adx, atr, bb.width, currentPrice);
           let rawScore = 0;
