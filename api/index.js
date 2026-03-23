@@ -14,7 +14,7 @@ export default function handler(req, res) {
         <header class="header">
             <div class="brand">
                 <div class="logo">⚡ NEXUS OMEGA</div>
-                <span class="version">v4.0</span>
+                <span class="version">v5.2</span>
             </div>
             <div class="market-ticker">
                 <div class="ticker-item">
