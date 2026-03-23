@@ -171,7 +171,7 @@ class SignalEngineV5_1 {
       if (klines.length < 2) return { poc: 0, vah: 0, val: 0, outOfValueArea: false };
       const data = klines.slice(-lookback);
       const buckets = {};
-      const bucketSize = 50; 
+      const bucketSize = Math.max(50, Math.round(atr * 0.6)); 
       data.forEach(k => {
           const typicalPrice = (k.high + k.low + k.close) / 3;
           const bucket = Math.round(typicalPrice / bucketSize) * bucketSize;
