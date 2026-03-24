@@ -274,10 +274,10 @@ class SignalEngineV5_2 {
   }
 
   detectRegime(adx, atr, bbWidth, currentPrice) {
-      if (adx > 35) return 'STRONG_TREND';
-      if (adx > 25 && bbWidth > 0.05) return 'TRENDING';
-      if (adx < 20 && bbWidth < 0.03) return 'TIGHT_RANGE';
-      if (atr > currentPrice * 0.008 && bbWidth < 0.04) return 'BREAKOUT_IMMINENT';
+      if (adx > 30) return 'STRONG_TREND';
+      if (adx > 20 || bbWidth > 0.04) return 'TRENDING';
+      if (adx < 15 && bbWidth < 0.02) return 'TIGHT_RANGE';
+      if (atr > currentPrice * 0.007) return 'BREAKOUT_IMMINENT';
       return 'CHOP';
   }
 
@@ -407,18 +407,15 @@ class SignalEngineV5_2 {
 
           // --- 2. REGIME GATES & TARGETING ---
           if (regime === 'CHOP') {
-              rawScore = 0;
-              reasons.length = 0;
-              reasons.push("Market is CHOP (Consolidating)", "Waiting for volatility expansion...");
-              riskFlags.push("Regime Block: Chop");
+              rawScore *= 0.8; // Minimal penalty to filter only the weakest signals
+              reasons.push("Low-Volatility Regime (-20% Confidence)");
           }
 
           let atrMultiplier = 1.5;
-          // FIX: TRENDING now requires 50 instead of 60 — was silently blocking valid signals
-          let reqScore = (regime === 'STRONG_TREND' || regime === 'TRENDING') ? 50 : 60;
+          let reqScore = 50; // Standardize for higher trade frequency across all regimes
 
           if (regime === 'TIGHT_RANGE') {
-              reqScore = 75; atrMultiplier = 1.0;
+              reqScore = 60; atrMultiplier = 1.0;
               if (rsi < 30) rawScore += 40;
               else if (rsi > 70) rawScore -= 40;
               else rawScore = 0;
@@ -440,8 +437,8 @@ class SignalEngineV5_2 {
 
           // --- 4. FINAL SIGNAL CHECK ---
           let signal = 'NEUTRAL';
-          if (rawScore >= reqScore && regime !== 'CHOP') signal = 'LONG';
-          else if (rawScore <= -reqScore && regime !== 'CHOP') signal = 'SHORT';
+          if (rawScore >= reqScore) signal = 'LONG';
+          else if (rawScore <= -reqScore) signal = 'SHORT';
 
           // Confidence calculation
           let confidence = (Math.abs(rawScore) * 0.5 + (reasons.length * 2)) * weight;

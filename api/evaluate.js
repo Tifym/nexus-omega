@@ -84,10 +84,8 @@ export default async function handler(req, res) {
           if (openPos.side === 'SHORT' && signal.signal.includes('LONG')) { shouldExitFull = true; exitReason = 'Signal Reversal'; }
       }
 
-      // 5. Regime Collapse Exit
-      if (!shouldExitFull && signal.regime === 'CHOP') {
-          shouldExitFull = true; exitReason = 'Regime Collapse';
-      }
+      // 5. Removed Regime Collapse Exit (Allows bot to hold through temporary chop)
+
 
       // 3. Partial exit at TP1 (50% close)
       if (!shouldExitFull && !openPos.partially_closed) {
