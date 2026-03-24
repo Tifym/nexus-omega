@@ -211,9 +211,17 @@ class SignalEngineV5_2 {
       try {
           const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 3000);
           const res = await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT', { signal: ctrl.signal });
+          if (!res.ok) throw new Error();
           const data = await res.json();
           return { rate: parseFloat(data.lastFundingRate || 0), valid: true };
-      } catch(e) { return { rate: 0, valid: false }; }
+      } catch(e) { 
+          // Fallback to Bybit
+          try {
+              const bRes = await fetch('https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=1');
+              const bData = await bRes.json();
+              return { rate: parseFloat(bData.result.list[0].fundingRate), valid: true };
+          } catch(e2) { return { rate: 0, valid: false }; }
+      }
   }
 
   async getCachedOI() {
@@ -222,6 +230,7 @@ class SignalEngineV5_2 {
       try {
           const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 3000);
           const res = await fetch('https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=15m&limit=16', { signal: ctrl.signal });
+          if (!res.ok) throw new Error();
           const data = await res.json();
           let changePercent = 0;
           if (data.length >= 2) {
@@ -232,7 +241,19 @@ class SignalEngineV5_2 {
           const result = { changePercent, valid: true };
           flowCache.oi = { data: result, timestamp: now };
           return result;
-      } catch(e) { return flowCache.oi.data || { changePercent: 0, valid: false }; }
+      } catch(e) { 
+          // Bybit fallback
+          try {
+              const bRes = await fetch('https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=15min&limit=16');
+              const bData = await bRes.json();
+              const list = bData.result.list;
+              const current = parseFloat(list[list.length-1].openInterest);
+              const old = parseFloat(list[0].openInterest);
+              const res = { changePercent: ((current - old) / old) * 100, valid: true };
+              flowCache.oi = { data: res, timestamp: now };
+              return res;
+          } catch(e2) { return flowCache.oi.data || { changePercent: 0, valid: false }; }
+      }
   }
 
   async getCachedLSRatio() {
@@ -330,9 +351,10 @@ class SignalEngineV5_2 {
           const closes = klines.map(k => k.close);
           const volumes = klines.map(k => k.volume);
 
-          // Volume: exclude live candle from baseline SMA, use completed candle for relativeVol
           const volSMA = this.calculateSMA(volumes.slice(0, -1), 20);
-          const relativeVol = volumes[volumes.length - 1] / (volSMA || 1);
+          // NEW logic: check the last completed candle (length - 2) for volume confirmation 
+          // to avoid early-candle 'fakeout' penalties.
+          const relativeVol = Math.max(volumes[volumes.length - 1], volumes[volumes.length - 2]) / (volSMA || 1);
 
           const rsiArray = this.calculateRSIArray(closes, 14);
           const rsi = rsiArray[rsiArray.length - 1];
