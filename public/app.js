@@ -204,6 +204,7 @@ class NexusOmegaDashboard {
 
         // ── 0. Console Logs (Matrix Mode) ────────────────────
         this.log(`Inbound telemetry cluster received. Latency: ${this.el('console-ping').textContent}`, 'system');
+        this.log(`PORTFOLIO SYNC: Balance $${this.formatPrice(data.stats.balance)} | Win Rate ${data.stats.winRate}% | Trades: ${data.stats.totalTrades}`, 'system');
         
         const ind = data.signal.indicators || {};
         if (ind.rsi) this.log(`EXECUTING CALC: RSI=${ind.rsi} | ATR=${ind.atr} | VOL=${ind.volatility}% | SCORE=${data.signal.score}`, 'calc');

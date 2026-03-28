@@ -113,10 +113,11 @@ body {
 
 /* Main Content */
 .main-content {
-  flex: 1; padding: 24px;
+  flex: 1; 
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 80px); /* Adjust based on header height around 80px */
+  min-height: 0;
 }
 
 .grid-layout {
@@ -304,26 +305,28 @@ body {
 /* Console Panel (Matrix Theme) */
 .console-panel {
     grid-column: 1 / 4; 
-    background: rgba(0, 10, 0, 0.85); /* Matrix dark */
+    background: rgba(0, 10, 0, 0.9); 
+    border: 1px solid rgba(0, 255, 65, 0.3); /* Stronger Matrix Border */
     font-family: 'JetBrains Mono', monospace;
     transition: all 0.3s ease;
-    height: 180px; /* Fixed height for desktop */
-    min-height: 180px;
+    height: 200px; /* Slightly taller */
+    min-height: 200px;
     overflow: hidden;
     position: relative;
-    box-shadow: inset 0 0 30px rgba(0, 255, 65, 0.05);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.1);
+    margin-bottom: 20px; /* Space before footer */
 }
 
 .console-body {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 15px 20px;
+    padding: 15px 20px 40px 20px; /* Added 40px bottom padding to avoid footer overlap */
     font-size: 11px;
     line-height: 1.5;
     display: flex;
     flex-direction: column;
-    scroll-behavior: smooth; /* Smooth scrolling */
+    scroll-behavior: smooth;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 255, 65, 0.2) transparent;
 }
