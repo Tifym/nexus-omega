@@ -304,11 +304,11 @@ body {
 /* Console Panel (Matrix Theme) */
 .console-panel {
     grid-column: 1 / 4; 
-    background: rgba(0, 10, 0, 0.85); /* Darker, slightly green tint */
-    border: 1px solid rgba(0, 255, 65, 0.15);
+    background: rgba(0, 10, 0, 0.85); /* Matrix dark */
     font-family: 'JetBrains Mono', monospace;
     transition: all 0.3s ease;
-    height: 180px; /* Fixed height strictly enforced */
+    height: 180px; /* Fixed height for desktop */
+    min-height: 180px;
     overflow: hidden;
     position: relative;
     box-shadow: inset 0 0 30px rgba(0, 255, 65, 0.05);
@@ -394,8 +394,19 @@ body {
 }
 
 @media (max-width: 1200px) {
-  .grid-layout { grid-template-columns: 1fr; height: auto; gap: 16px; }
+  .grid-layout { 
+    grid-template-columns: 1fr; 
+    grid-template-rows: repeat(3, auto) 220px; /* 3 auto rows for panels, 1 fixed for console */
+    height: auto; 
+    gap: 16px; 
+  }
+  .main-content { height: auto; } /* Let it scroll on mobile */
   .panel { max-height: none; min-height: 400px; }
+  .console-panel { 
+    grid-column: 1; 
+    height: 220px; 
+    order: 10; /* Put it at the bottom */
+  }
   .signal-panel { order: -1; } /* Signal on top on tablet */
   .portfolio-panel { order: 1; }
   .history-panel { order: 2; }
