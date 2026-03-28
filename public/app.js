@@ -290,10 +290,10 @@ class NexusOmegaDashboard {
             scoreEl.className   = 'metric-value ' + (score > 0 ? 'profit' : score < 0 ? 'loss' : '');
         }
 
-        ind = data.signal.indicators || {};
-        this.set('metric-rsi', ind.rsi  || '--');
-        this.set('metric-atr', ind.atr  || '--');
-        this.set('metric-vol', (ind.volatility || '--') + (ind.volatility ? '%' : ''));
+        const statsInd = data.signal.indicators || {};
+        this.set('metric-rsi', statsInd.rsi  || '--');
+        this.set('metric-atr', statsInd.atr  || '--');
+        this.set('metric-vol', (statsInd.volatility || '--') + (statsInd.volatility ? '%' : ''));
 
         // ── 5. Reasons ───────────────────────────────────────
         const rList = this.el('reasons-list');

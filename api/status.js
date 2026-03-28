@@ -52,13 +52,12 @@ export default async function handler(req, res) {
         score:      signal.score   || 0,
         regime:     signal.regime  || 'UNKNOWN',
         marketStructure: signal.marketStructure || {},
-        entryConditions: signal.entryConditions || {},
         targets:    signal.targets || {},
         indicators: signal.indicators || {},
         reasons:    signal.reasons || [],
         riskFlags:  signal.riskFlags || [],
         stopLoss:   (signal.targets && signal.targets.stopLoss) || 0,
-        takeProfit: (signal.targets && signal.targets.tp2) || 0,
+        takeProfit: (signal.targets && signal.targets.tp2) || (signal.targets && signal.targets.takeProfit2) || 0,
         timestamp:  signal.timestamp  || now
       },
       price: {
@@ -86,7 +85,7 @@ export default async function handler(req, res) {
         currentPrice: consensus.consensusPrice,
         unrealizedPnl: position.unrealized_pnl || 0,
         stopLoss:     position.stop_loss,
-        takeProfit:   position.take_profit,
+        takeProfit:   position.take_profit2 || position.take_profit || 0,
         entryTime:    position.entry_time
       } : null,
       history: history.map(t => ({
