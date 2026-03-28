@@ -76,6 +76,10 @@ class NexusOmegaDashboard {
                 line.style.cssText = 'color:#00d084; font-size:14px; margin-top:10px; text-shadow:0 0 10px #00d084;';
                 line.textContent = '> ' + bootLines[i];
                 overlay.appendChild(line);
+                
+                // Also log to our new terminal
+                this.log(`SYSTEM: ${bootLines[i]}`, i === bootLines.length - 1 ? 'signal' : 'system');
+                
                 if (i === bootLines.length - 1) this.speak(bootLines[i]);
             }
 
@@ -143,6 +147,30 @@ class NexusOmegaDashboard {
         if (el) el.textContent = new Date().toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
     }
 
+    log(msg, type = 'system') {
+        const body = this.el('console-body');
+        if (!body) return;
+
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type}`;
+        
+        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        entry.innerHTML = `
+            <span class="log-time">[${timestamp}]</span>
+            <span class="log-msg">${msg}</span>
+        `;
+
+        body.appendChild(entry);
+        
+        // Keep only last 100 entries
+        while (body.children.length > 100) {
+            body.removeChild(body.firstChild);
+        }
+
+        // Auto-scroll
+        body.scrollTop = body.scrollHeight;
+    }
+
     formatPrice(price) {
         if (!price || isNaN(price)) return '0.00';
         return parseFloat(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -156,7 +184,14 @@ class NexusOmegaDashboard {
             const latency  = Date.now() - start;
             const latEl    = this.el('footer-latency');
             if (latEl) latEl.textContent = `⚡ ${latency}ms`;
-            if (data.error) { console.error('API Error:', data.error); return; }
+            
+            const pingEl = this.el('console-ping');
+            if (pingEl) pingEl.textContent = `${latency}ms`;
+
+            if (data.error) { 
+                this.log(`API ERROR: ${data.error}`, 'error');
+                return; 
+            }
             this.updateDashboard(data);
         } catch (err) {
             console.error('Fetch failed:', err);
@@ -166,6 +201,23 @@ class NexusOmegaDashboard {
     // ── Dashboard Renderer ────────────────────────────────────
     updateDashboard(data) {
         if (!data || !data.signal || !data.price || !data.stats) return;
+
+        // ── 0. Console Logs ──────────────────────────────────
+        this.log(`Inbound telemetry received. Block height: ${Math.floor(Date.now()/1000)}`, 'system');
+        
+        const ind = data.signal.indicators || {};
+        if (ind.rsi) this.log(`Calculation: RSI=${ind.rsi} | ATR=${ind.atr} | VOL=${ind.volatility}%`, 'calc');
+        
+        if (data.price.exchanges && data.price.exchanges.length > 0) {
+            const exName = data.price.exchanges[0].exchange || 'Main';
+            this.log(`Raw Data: ${exName} price at $${this.formatPrice(data.price.consensus)} | Spread: ${data.price.spread.toFixed(4)}%`, 'data');
+        }
+
+        if (data.signal.text !== 'NEUTRAL') {
+            this.log(`SIGNAL INTERCEPTED: ${data.signal.text} - Confidence: ${data.signal.confidence}%`, 'signal');
+        } else {
+            this.log(`Engine Status: Scanning for high-probability entry... Score: ${data.signal.score}`, 'system');
+        }
 
         // ── 1. Header ────────────────────────────────────────
         this.set('header-price',    '$' + this.formatPrice(data.price.consensus));
@@ -230,7 +282,7 @@ class NexusOmegaDashboard {
             scoreEl.className   = 'metric-value ' + (score > 0 ? 'profit' : score < 0 ? 'loss' : '');
         }
 
-        const ind = data.signal.indicators || {};
+        ind = data.signal.indicators || {};
         this.set('metric-rsi', ind.rsi  || '--');
         this.set('metric-atr', ind.atr  || '--');
         this.set('metric-vol', (ind.volatility || '--') + (ind.volatility ? '%' : ''));

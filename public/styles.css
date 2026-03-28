@@ -114,15 +114,20 @@ body {
 /* Main Content */
 .main-content {
   flex: 1; padding: 24px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 80px); /* Adjust based on header height around 80px */
 }
 
 .grid-layout {
   display: grid;
   grid-template-columns: 340px 1fr 400px;
+  grid-template-rows: 1fr 180px; /* Split into 2 rows, console takes the bottom one */
   gap: 20px;
   max-width: 1800px;
   margin: 0 auto;
-  height: calc(100vh - 140px);
+  flex: 1;
+  min-height: 0;
 }
 
 /* Panels */
@@ -295,7 +300,53 @@ body {
 .data-source, .latency { font-family: 'JetBrains Mono', monospace; color: var(--text-tertiary); display: flex; align-items: center; gap: 6px; }
 .footer-right { font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); font-weight: 600; font-size: 14px; }
 
+
+/* Console Panel */
+.console-panel {
+    grid-column: 1 / 4; /* Span across all 3 columns */
+    background: rgba(0, 0, 0, 0.4);
+    font-family: 'JetBrains Mono', monospace;
+    transition: all 0.3s ease;
+    min-height: 0;
+}
+
+.console-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 20px;
+    font-size: 11px;
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Log types */
+.log-entry { 
+    margin-bottom: 4px; 
+    padding: 2px 0; 
+    display: flex;
+    align-items: flex-start;
+    animation: fadeIn 0.2s ease-out; 
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
+
+.log-time { color: var(--text-tertiary); margin-right: 12px; font-size: 10px; flex-shrink: 0; }
+.log-msg { color: var(--text-secondary); word-break: break-all; }
+
+.log-entry.system { color: var(--accent-cyan); border-left: 2px solid var(--accent-cyan); padding-left: 8px; }
+.log-entry.data { color: var(--accent-purple); border-left: 2px solid var(--accent-purple); padding-left: 8px; }
+.log-entry.calc { color: var(--accent-yellow); border-left: 2px solid var(--accent-yellow); padding-left: 8px; }
+.log-entry.signal { font-weight: 700; color: var(--accent-green); border-left: 4px solid var(--accent-green); background: rgba(0, 208, 132, 0.05); padding: 4px 12px; border-radius: 4px; }
+.log-entry.error { color: var(--accent-red); font-weight: bold; border-left: 2px solid var(--accent-red); padding-left: 8px; }
+
+.badge.console-status {
+    background: rgba(0, 212, 255, 0.1);
+    color: var(--accent-cyan);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+}
+
 /* Scrollbar */
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }

@@ -193,6 +193,22 @@ export default function handler(req, res) {
                         <!-- Populated by JS -->
                     </div>
                 </aside>
+
+                <section class="panel console-panel glass">
+                    <div class="panel-header">
+                        <h2>Neural Network Terminal</h2>
+                        <div class="header-badges">
+                            <span class="badge console-status" id="console-status">STREAMING</span>
+                            <span class="badge session" id="console-ping">0ms</span>
+                        </div>
+                    </div>
+                    <div class="console-body" id="console-body">
+                        <div class="log-entry system">
+                            <span class="log-time">[00:00:00]</span>
+                            <span class="log-msg">Initializing terminal core... uplink established.</span>
+                        </div>
+                    </div>
+                </section>
             </div>
         </main>
 
