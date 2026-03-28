@@ -301,48 +301,84 @@ body {
 .footer-right { font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); font-weight: 600; font-size: 14px; }
 
 
-/* Console Panel */
+/* Console Panel (Matrix Theme) */
 .console-panel {
-    grid-column: 1 / 4; /* Span across all 3 columns */
-    background: rgba(0, 0, 0, 0.4);
+    grid-column: 1 / 4; 
+    background: rgba(0, 10, 0, 0.85); /* Darker, slightly green tint */
+    border: 1px solid rgba(0, 255, 65, 0.15);
     font-family: 'JetBrains Mono', monospace;
     transition: all 0.3s ease;
-    min-height: 0;
+    height: 180px; /* Fixed height strictly enforced */
+    overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 0 30px rgba(0, 255, 65, 0.05);
 }
 
 .console-body {
     flex: 1;
     overflow-y: auto;
-    padding: 12px 20px;
+    overflow-x: hidden;
+    padding: 15px 20px;
     font-size: 11px;
-    line-height: 1.6;
+    line-height: 1.5;
     display: flex;
     flex-direction: column;
+    scroll-behavior: smooth; /* Smooth scrolling */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 255, 65, 0.2) transparent;
 }
 
-/* Log types */
+/* Custom Scrollbar for Matrix Terminal */
+.console-body::-webkit-scrollbar { width: 4px; }
+.console-body::-webkit-scrollbar-track { background: transparent; }
+.console-body::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.2); border-radius: 2px; }
+
+/* Log types - Matrix Glow */
 .log-entry { 
-    margin-bottom: 4px; 
-    padding: 2px 0; 
+    margin-bottom: 2px; 
+    padding: 1px 0; 
     display: flex;
     align-items: flex-start;
-    animation: fadeIn 0.2s ease-out; 
+    animation: terminalIn 0.15s ease-out;
+    color: #00ff41; /* Classic Matrix Green */
+    text-shadow: 0 0 5px rgba(0, 255, 65, 0.2);
+    font-weight: 500;
 }
-@keyframes fadeIn { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
 
-.log-time { color: var(--text-tertiary); margin-right: 12px; font-size: 10px; flex-shrink: 0; }
-.log-msg { color: var(--text-secondary); word-break: break-all; }
+@keyframes terminalIn { 
+    from { opacity: 0; transform: translateY(5px); filter: blur(2px); } 
+    to { opacity: 1; transform: translateY(0); filter: blur(0); } 
+}
 
-.log-entry.system { color: var(--accent-cyan); border-left: 2px solid var(--accent-cyan); padding-left: 8px; }
-.log-entry.data { color: var(--accent-purple); border-left: 2px solid var(--accent-purple); padding-left: 8px; }
-.log-entry.calc { color: var(--accent-yellow); border-left: 2px solid var(--accent-yellow); padding-left: 8px; }
-.log-entry.signal { font-weight: 700; color: var(--accent-green); border-left: 4px solid var(--accent-green); background: rgba(0, 208, 132, 0.05); padding: 4px 12px; border-radius: 4px; }
-.log-entry.error { color: var(--accent-red); font-weight: bold; border-left: 2px solid var(--accent-red); padding-left: 8px; }
+.log-time { color: rgba(0, 255, 65, 0.4); margin-right: 12px; font-size: 10px; flex-shrink: 0; }
+.log-msg { word-break: break-all; }
+
+/* Distinction for Signal/Critical logs */
+.log-entry.signal { 
+    color: #fff; 
+    background: rgba(0, 255, 65, 0.15); 
+    padding: 4px 12px; 
+    border-radius: 4px; 
+    text-shadow: 0 0 10px #00ff41; 
+    border-left: 3px solid #00ff41;
+}
+
+.log-entry.error { 
+    color: #ff4757; 
+    text-shadow: 0 0 8px #ff4757; 
+    border-left: 2px solid #ff4757; 
+    padding-left: 8px; 
+}
 
 .badge.console-status {
-    background: rgba(0, 212, 255, 0.1);
-    color: var(--accent-cyan);
-    border: 1px solid rgba(0, 212, 255, 0.3);
+    background: rgba(0, 255, 65, 0.1);
+    color: #00ff41;
+    border: 1px solid rgba(0, 255, 65, 0.3);
+    text-shadow: 0 0 5px #00ff41;
+}
+
+#console-ping {
+    color: rgba(0, 255, 65, 0.6);
 }
 
 /* Scrollbar */

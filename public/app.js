@@ -202,21 +202,28 @@ class NexusOmegaDashboard {
     updateDashboard(data) {
         if (!data || !data.signal || !data.price || !data.stats) return;
 
-        // ── 0. Console Logs ──────────────────────────────────
-        this.log(`Inbound telemetry received. Block height: ${Math.floor(Date.now()/1000)}`, 'system');
+        // ── 0. Console Logs (Matrix Mode) ────────────────────
+        this.log(`Inbound telemetry cluster received. Latency: ${this.el('console-ping').textContent}`, 'system');
         
         const ind = data.signal.indicators || {};
-        if (ind.rsi) this.log(`Calculation: RSI=${ind.rsi} | ATR=${ind.atr} | VOL=${ind.volatility}%`, 'calc');
+        if (ind.rsi) this.log(`EXECUTING CALC: RSI=${ind.rsi} | ATR=${ind.atr} | VOL=${ind.volatility}% | SCORE=${data.signal.score}`, 'calc');
         
         if (data.price.exchanges && data.price.exchanges.length > 0) {
-            const exName = data.price.exchanges[0].exchange || 'Main';
-            this.log(`Raw Data: ${exName} price at $${this.formatPrice(data.price.consensus)} | Spread: ${data.price.spread.toFixed(4)}%`, 'data');
+            data.price.exchanges.forEach(ex => {
+                this.log(`RAW DATA [${ex.exchange}]: $${this.formatPrice(ex.price)} | Status: ACTIVE`, 'data');
+            });
+            this.log(`CONSENSUS: $${this.formatPrice(data.price.consensus)} | SPREAD: ${data.price.spread.toFixed(4)}%`, 'system');
+        }
+
+        if (data.signal.riskFlags && data.signal.riskFlags.length > 0) {
+            this.log(`RISK ALERT: ${data.signal.riskFlags.join(' | ')}`, 'error');
         }
 
         if (data.signal.text !== 'NEUTRAL') {
-            this.log(`SIGNAL INTERCEPTED: ${data.signal.text} - Confidence: ${data.signal.confidence}%`, 'signal');
+            this.log(`⚡ CRITICAL SIGNAL: ${data.signal.text} (CONFIDENCE: ${data.signal.confidence}%)`, 'signal');
+            this.log(`TARGETS: TP=${this.formatPrice(data.signal.takeProfit)} | SL=${this.formatPrice(data.signal.stopLoss)}`, 'calc');
         } else {
-            this.log(`Engine Status: Scanning for high-probability entry... Score: ${data.signal.score}`, 'system');
+            this.log(`SYSTEM IDLE: Scanning market structure [${data.signal.regime || 'NORMAL'}]...`, 'system');
         }
 
         // ── 1. Header ────────────────────────────────────────
