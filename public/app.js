@@ -291,9 +291,12 @@ class NexusOmegaDashboard {
         }
 
         const statsInd = data.signal.indicators || {};
-        this.set('metric-rsi', statsInd.rsi  || '--');
-        this.set('metric-atr', statsInd.atr  || '--');
-        this.set('metric-vol', (statsInd.volatility || '--') + (statsInd.volatility ? '%' : ''));
+        this.set('metric-rsi', statsInd.rsi != null ? (+statsInd.rsi).toFixed(1) : '--');
+        this.set('metric-atr', statsInd.atr != null ? (+statsInd.atr).toFixed(0) : '--');
+        // volatility may be a number (new engine) or '0.23%' string (old engine)
+        const volRaw = statsInd.volatility;
+        const volStr = volRaw == null ? '--' : (typeof volRaw === 'string' ? volRaw : (+volRaw).toFixed(2) + '%');
+        this.set('metric-vol', volStr);
 
         // ── 5. Reasons ───────────────────────────────────────
         const rList = this.el('reasons-list');

@@ -45,19 +45,21 @@ export default async function handler(req, res) {
       ? ((state.winning_trades / state.total_trades) * 100).toFixed(1)
       : 0;
 
+    const ms = signal.marketStructure || {};
     res.status(200).json({
       signal: {
         text:       signal.signal  || 'NEUTRAL',
         confidence: signal.confidence || 0,
         score:      signal.score   || 0,
         regime:     signal.regime  || 'UNKNOWN',
-        marketStructure: signal.marketStructure || {},
+        fearGreed:  ms.fearGreedIndex ?? (signal.fearGreed ?? 50),
+        marketStructure: ms,
         targets:    signal.targets || {},
         indicators: signal.indicators || {},
         reasons:    signal.reasons || [],
         riskFlags:  signal.riskFlags || [],
         stopLoss:   (signal.targets && signal.targets.stopLoss) || 0,
-        takeProfit: (signal.targets && signal.targets.tp2) || (signal.targets && signal.targets.takeProfit2) || 0,
+        takeProfit: (signal.targets && signal.targets.tp2) || 0,
         timestamp:  signal.timestamp  || now
       },
       price: {

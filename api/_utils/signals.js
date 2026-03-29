@@ -1,43 +1,17 @@
 // ============================================================
-// ULTIMATE_SIGNAL_V2.js — WebSocket Edition
-// BTC Scalper Signal Engine · 2026
-//
-// Architecture:
-//   ┌─────────────────────────────────────────┐
-//   │  WSDataLayer  — 3 exchange WS streams   │
-//   │  + Hyperliquid REST (generous limits)   │
-//   │  + alt.me REST (daily cadence, cached)  │
-//   └──────────────┬──────────────────────────┘
-//                  │ .snapshot() — instant, never fails
-//   ┌──────────────▼──────────────────────────┐
-//   │  Indicators  — pure math, no I/O        │
-//   └──────────────┬──────────────────────────┘
-//                  │
-//   ┌──────────────▼──────────────────────────┐
-//   │  ScoreEngine — 18 factors, MTF gates    │
-//   └──────────────┬──────────────────────────┘
-//                  │
-//   ┌──────────────▼──────────────────────────┐
-//   │  generateSignal() — call anytime        │
-//   └─────────────────────────────────────────┘
-//
-// Usage:
-//   import { engine } from './ULTIMATE_SIGNAL_V2.js';
-//   await engine.connect();                    // once on startup
-//   const signal = engine.generateSignal();    // synchronous, instant
-//   engine.on('signal', s => console.log(s));  // or subscribe
+// NEXUS OMEGA — signals.js (Serverless REST Edition)
+// Compatible with Vercel serverless / Node.js 18+
+// No WebSocket — uses REST seeds cached in module memory.
 // ============================================================
 
 // ============================================================
 // SECTION 1 — CONSTANTS
 // ============================================================
 
-const SYMBOL    = 'BTCUSDT';
+const SYMBOL     = 'BTCUSDT';
 const SYMBOL_OKX = 'BTC-USDT-SWAP';
 const MAX_KLINES = 300;
-const RECONNECT_MS = 2_000;
 
-// Minimum candles needed before any signal is valid
 const MIN_CANDLES = {
   '15m': 60,
   '1h':  30,
@@ -45,497 +19,288 @@ const MIN_CANDLES = {
 };
 
 // ============================================================
-// SECTION 2 — KLINE RING BUFFER
+// SECTION 2 — IN-MEMORY CACHE (persists across warm requests)
 // ============================================================
 
-class KlineBuffer {
-  constructor(maxLen = MAX_KLINES) {
-    this.buf    = [];
-    this.maxLen = maxLen;
-  }
+const _cache = {
+  klines15m:  [],
+  klines1h:   [],
+  klines5m:   [],
+  bybit15m:   [],
+  okx15m:     [],
+  fearGreed:  { value: 50, label: 'Neutral', valid: false },
+  funding:    { rate: 0,   valid: false },
+  oi:         { changePercent: 0, valid: false },
+  ls:         { ratio: 1.0, valid: false },
+  hl:         { oi: 0, funding: 0, markPx: 0, valid: false },
+  bookTick:   { bid: 0, ask: 0, spread: 0, valid: false },
+  lastUpdated: 0,
+  ttlMs: 60_000,  // refresh every 60s
+};
 
-  // Accepts a normalised candle object:
-  // { timestamp, open, high, low, close, volume, closed }
-  push(candle) {
-    const last = this.buf[this.buf.length - 1];
-    if (last && last.timestamp === candle.timestamp) {
-      this.buf[this.buf.length - 1] = candle; // live update
-    } else {
-      this.buf.push(candle);
-      if (this.buf.length > this.maxLen) this.buf.shift();
-    }
-  }
+// ============================================================
+// SECTION 3 — KLINE HELPER
+// ============================================================
 
-  // Only finalised candles — safe for all indicator maths
-  closed() {
-    return this.buf.filter(k => k.closed !== false);
-  }
-
-  all() { return this.buf; }
-
-  get length() { return this.buf.length; }
-
-  lastPrice() {
-    const b = this.buf[this.buf.length - 1];
-    return b ? b.close : 0;
-  }
-
-  isReady(min) { return this.closed().length >= min; }
+function mergeKlines(existing, incoming) {
+  const map = new Map();
+  for (const k of existing) map.set(k.timestamp, k);
+  for (const k of incoming) map.set(k.timestamp, k);
+  const out = [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
+  return out.slice(-MAX_KLINES);
 }
 
 // ============================================================
-// SECTION 3 — LIQUIDATION ROLLING WINDOW
+// SECTION 4 — REST DATA FETCHER
 // ============================================================
 
-class LiqWindow {
-  constructor(windowMs = 900_000) { // 15-minute window
-    this.events   = [];
-    this.windowMs = windowMs;
-  }
-
-  add(side, price, qty) {
-    this.events.push({ side, price, qty, ts: Date.now() });
-    this._prune();
-  }
-
-  _prune() {
-    const cutoff = Date.now() - this.windowMs;
-    this.events = this.events.filter(e => e.ts >= cutoff);
-  }
-
-  snapshot() {
-    this._prune();
-    let longLiq = 0, shortLiq = 0, maxQty = 0, magnet = null;
-    for (const e of this.events) {
-      // Binance: side='SELL' means a long position was liquidated
-      if (e.side === 'SELL') longLiq  += e.qty;
-      if (e.side === 'BUY')  shortLiq += e.qty;
-      if (e.qty > maxQty) { maxQty = e.qty; magnet = e.price; }
-    }
-    return { longLiq, shortLiq, magnet, count: this.events.length, valid: true };
+async function fetchWithTimeout(url, ms = 4000, opts = {}) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    clearTimeout(id);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
   }
 }
 
-// ============================================================
-// SECTION 4 — WEBSOCKET FACTORY (auto-reconnect)
-// ============================================================
+const normBinance = c => ({
+  timestamp: c[0], open: +c[1], high: +c[2], low: +c[3],
+  close: +c[4], volume: +c[5], closed: true,
+});
 
-function createWS(url, handlers, label) {
-  let ws, dead = false;
-
-  function connect() {
-    if (dead) return;
-    ws = new WebSocket(url);
-    ws.onopen    = () => { console.log(`[WS:${label}] connected`); handlers.onOpen?.(ws); };
-    ws.onmessage = e => { try { handlers.onMessage(JSON.parse(e.data)); } catch {} };
-    ws.onerror   = () => {};
-    ws.onclose   = () => {
-      if (!dead) {
-        console.warn(`[WS:${label}] dropped — reconnect in ${RECONNECT_MS}ms`);
-        setTimeout(connect, RECONNECT_MS);
-      }
-    };
-  }
-
-  connect();
-
-  return {
-    send(data) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data)); },
-    close()    { dead = true; ws?.close(); },
-    alive()    { return ws?.readyState === WebSocket.OPEN; },
-  };
-}
-
-// ============================================================
-// SECTION 5 — WS DATA LAYER
-// ============================================================
-
-class WSDataLayer {
-  constructor() {
-    // ── Kline buffers ──────────────────────────────────────
-    this.buf = {
-      binance15m: new KlineBuffer(MAX_KLINES),
-      binance1h:  new KlineBuffer(100),
-      binance5m:  new KlineBuffer(60),
-      bybit15m:   new KlineBuffer(MAX_KLINES),
-      okx15m:     new KlineBuffer(MAX_KLINES),
-    };
-
-    // ── Live flow data ─────────────────────────────────────
-    this.funding    = { rate: 0,   valid: false };
-    this.bookTicker = { bid: 0, ask: 0, spread: 0, valid: false };
-    this.liqs       = new LiqWindow(900_000);
-    this.ls         = { ratio: 1.0, valid: false };
-
-    // ── REST-only data (slow cadence, cached in-memory) ────
-    this.oi        = { changePercent: 0, valid: false };
-    this.fearGreed = { value: 50, label: 'Neutral', valid: false };
-    this.hl        = { oi: 0, funding: 0, markPx: 0, valid: false };
-
-    this._sockets   = [];
-    this._timers    = [];
-    this._prevHLOI  = null;
-    this._ready     = false;
-  }
-
-  // ── Public: connect all streams ────────────────────────────
-  async connect() {
-    if (this._ready) return;
-
-    // 1. Seed kline history from REST (one-shot, fills buffers immediately)
-    await this._seedAllKlines();
-
-    // 2. Open WebSocket streams
-    this._openBinanceStream();
-    this._openBybitStream();
-    this._openOKXStream();
-
-    // 3. Slow REST polls (data with no useful WS equivalent)
-    await Promise.all([
-      this._pollFearGreed(),
-      this._pollHyperliquid(),
-      this._pollOI(),
-      this._pollLS(),
-    ]);
-
-    this._timers.push(
-      setInterval(() => this._pollFearGreed(),   600_000), // 10 min
-      setInterval(() => this._pollHyperliquid(),  60_000), // 1 min
-      setInterval(() => this._pollOI(),          300_000), // 5 min
-      setInterval(() => this._pollLS(),          300_000), // 5 min
+async function fetchKlines15m() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/klines?symbol=${SYMBOL}&interval=15m&limit=300`, 5000
     );
-
-    this._ready = true;
-    console.log('[DataLayer] All streams live');
-  }
-
-  // ── Public: instant zero-fail snapshot ─────────────────────
-  snapshot() {
-    const b15  = this.buf.binance15m.closed();
-    const by15 = this.buf.bybit15m.closed();
-    const ok15 = this.buf.okx15m.closed();
-    const b1h  = this.buf.binance1h.closed();
-    const b5m  = this.buf.binance5m.closed();
-
-    // Consensus price across exchanges
-    const livePrices = [b15, by15, ok15]
-      .filter(k => k.length > 0)
-      .map(k => k[k.length - 1].close);
-    const consensusPrice = livePrices.length
-      ? livePrices.reduce((a, b) => a + b, 0) / livePrices.length
-      : 0;
-    const anomaly = livePrices.length >= 3
-      && (Math.max(...livePrices) - Math.min(...livePrices)) / Math.min(...livePrices) > 0.003;
-
-    // Stale guard
-    const lastTs = b15.length ? b15[b15.length - 1].timestamp : 0;
-    const stale  = Date.now() - lastTs > 1_800_000;
-
-    return {
-      ready:    this._ready && !stale && b15.length >= MIN_CANDLES['15m'],
-      stale,
-      anomaly,
-      sources:  livePrices.length,
-      price:    consensusPrice || this.buf.binance15m.lastPrice(),
-
-      klines:   b15,   // 15m primary
-      klines1h: b1h,   // 1h HTF gate
-      klines5m: b5m,   // 5m micro-entry gate
-
-      funding:   this.funding,
-      bookTick:  this.bookTicker,
-      liqData:   this.liqs.snapshot(),
-      oi:        this.oi,
-      ls:        this.ls,
-      fearGreed: this.fearGreed,
-      hl:        this.hl,
-    };
-  }
-
-  destroy() {
-    this._sockets.forEach(s => s.close());
-    this._timers.forEach(clearInterval);
-    this._ready = false;
-  }
-
-  // ════════════════════════════════════════════════════════
-  // BINANCE FUTURES — combined multi-stream
-  // Streams: kline 15m/1h/5m · markPrice · bookTicker · forceOrder
-  // ════════════════════════════════════════════════════════
-  _openBinanceStream() {
-    const sym = SYMBOL.toLowerCase();
-    const streams = [
-      `${sym}@kline_15m`,
-      `${sym}@kline_1h`,
-      `${sym}@kline_5m`,
-      `${sym}@markPrice@1s`,
-      `${sym}@bookTicker`,
-      `${sym}@forceOrder`,
-    ].join('/');
-
-    const url = `wss://fstream.binance.com/stream?streams=${streams}`;
-
-    const ws = createWS(url, {
-      onMessage: msg => {
-        if (!msg.stream || !msg.data) return;
-        const { stream: s, data: d } = msg;
-
-        if (s.includes('@kline_15m') && d.k) {
-          this.buf.binance15m.push(_normBinanceKline(d.k));
-        }
-        if (s.includes('@kline_1h') && d.k) {
-          this.buf.binance1h.push(_normBinanceKline(d.k));
-        }
-        if (s.includes('@kline_5m') && d.k) {
-          this.buf.binance5m.push(_normBinanceKline(d.k));
-        }
-        if (s.includes('@markPrice')) {
-          this.funding = { rate: parseFloat(d.r || 0), valid: true };
-        }
-        if (s.includes('@bookTicker')) {
-          const bid = parseFloat(d.b), ask = parseFloat(d.a);
-          this.bookTicker = { bid, ask, spread: ask - bid, valid: true };
-        }
-        if (s.includes('@forceOrder') && d.o) {
-          const o = d.o;
-          this.liqs.add(o.S, parseFloat(o.p), parseFloat(o.q));
-        }
-      }
-    }, 'Binance');
-
-    this._sockets.push(ws);
-  }
-
-  // ════════════════════════════════════════════════════════
-  // BYBIT v5 — 15m klines (consensus cross-check)
-  // Requires subscribe frame after open + 20s ping keepalive
-  // ════════════════════════════════════════════════════════
-  _openBybitStream() {
-    const url = 'wss://stream.bybit.com/v5/public/linear';
-    let pingTimer;
-
-    const ws = createWS(url, {
-      onOpen: (socket) => {
-        socket.send(JSON.stringify({
-          op:   'subscribe',
-          args: [`kline.15.${SYMBOL}`],
-        }));
-        pingTimer = setInterval(() => ws.send({ op: 'ping' }), 20_000);
-      },
-      onMessage: msg => {
-        if (msg.topic?.startsWith('kline.15') && Array.isArray(msg.data)) {
-          for (const k of msg.data) {
-            this.buf.bybit15m.push({
-              timestamp: k.start,
-              open:      parseFloat(k.open),
-              high:      parseFloat(k.high),
-              low:       parseFloat(k.low),
-              close:     parseFloat(k.close),
-              volume:    parseFloat(k.volume),
-              closed:    k.confirm,
-            });
-          }
-        }
-      }
-    }, 'Bybit');
-
-    // Clean up ping on destroy
-    const origClose = ws.close.bind(ws);
-    ws.close = () => { clearInterval(pingTimer); origClose(); };
-
-    this._sockets.push(ws);
-  }
-
-  // ════════════════════════════════════════════════════════
-  // OKX — 15m klines + live L/S ratio
-  // Requires subscribe frame + 'ping' string keepalive
-  // ════════════════════════════════════════════════════════
-  _openOKXStream() {
-    const url = 'wss://ws.okx.com:8443/ws/v5/public';
-    let pingTimer;
-
-    const ws = createWS(url, {
-      onOpen: (socket) => {
-        socket.send(JSON.stringify({
-          op:   'subscribe',
-          args: [
-            { channel: 'candle15m', instId: SYMBOL_OKX },
-            { channel: 'long-short-account-ratio-contract', ccy: 'BTC', period: '5m' },
-          ],
-        }));
-        // OKX needs a raw 'ping' string, not JSON
-        pingTimer = setInterval(() => {
-          if (ws.alive()) socket.send('ping');
-        }, 25_000);
-      },
-      onMessage: msg => {
-        if (typeof msg === 'string' || msg === 'pong') return;
-        if (!msg.arg || !msg.data) return;
-
-        if (msg.arg.channel === 'candle15m') {
-          for (const c of msg.data) {
-            // OKX format: [ts,o,h,l,c,vol,volCcy,volCcyQuote,confirm]
-            this.buf.okx15m.push({
-              timestamp: parseInt(c[0]),
-              open:      parseFloat(c[1]),
-              high:      parseFloat(c[2]),
-              low:       parseFloat(c[3]),
-              close:     parseFloat(c[4]),
-              volume:    parseFloat(c[5]),
-              closed:    c[8] === '1',
-            });
-          }
-        }
-
-        if (msg.arg.channel === 'long-short-account-ratio-contract') {
-          const r = msg.data[0];
-          if (r) this.ls = { ratio: parseFloat(r[1]), valid: true };
-        }
-      }
-    }, 'OKX');
-
-    const origClose = ws.close.bind(ws);
-    ws.close = () => { clearInterval(pingTimer); origClose(); };
-
-    this._sockets.push(ws);
-  }
-
-  // ════════════════════════════════════════════════════════
-  // ONE-SHOT REST SEED — fills kline history on startup
-  // so the engine has 300 candles immediately, not after 75h
-  // ════════════════════════════════════════════════════════
-  async _seedAllKlines() {
-    const REST = 'https://fapi.binance.com/fapi/v1/klines';
-    const norm = d => d.map(c => ({
-      timestamp: c[0], open: +c[1], high: +c[2], low: +c[3],
-      close: +c[4], volume: +c[5], closed: true,
-    }));
-
-    const fetch15m = fetch(`${REST}?symbol=${SYMBOL}&interval=15m&limit=300`)
-      .then(r => r.json()).then(norm)
-      .then(ks => { for (const k of ks) this.buf.binance15m.push(k); })
-      .catch(e => console.warn('[Seed] 15m failed:', e.message));
-
-    const fetch1h = fetch(`${REST}?symbol=${SYMBOL}&interval=1h&limit=100`)
-      .then(r => r.json()).then(norm)
-      .then(ks => { for (const k of ks) this.buf.binance1h.push(k); })
-      .catch(e => console.warn('[Seed] 1h failed:', e.message));
-
-    const fetch5m = fetch(`${REST}?symbol=${SYMBOL}&interval=5m&limit=60`)
-      .then(r => r.json()).then(norm)
-      .then(ks => { for (const k of ks) this.buf.binance5m.push(k); })
-      .catch(e => console.warn('[Seed] 5m failed:', e.message));
-
-    // Seed Bybit + OKX for consensus baseline
-    const bybitSeed = fetch(
-      `https://api.bybit.com/v5/market/kline?category=linear&symbol=${SYMBOL}&interval=15&limit=300`
-    ).then(r => r.json()).then(d => {
-      if (d.retCode !== 0) return;
-      const ks = d.result.list.map(c => ({
-        timestamp: parseInt(c[0]), open: +c[1], high: +c[2], low: +c[3],
-        close: +c[4], volume: +c[5], closed: true,
-      })).reverse();
-      for (const k of ks) this.buf.bybit15m.push(k);
-    }).catch(() => {});
-
-    const okxSeed = fetch(
-      `https://www.okx.com/api/v5/market/candles?instId=${SYMBOL_OKX}&bar=15m&limit=300`
-    ).then(r => r.json()).then(d => {
-      if (d.code !== '0') return;
-      const ks = d.data.map(c => ({
-        timestamp: parseInt(c[0]), open: +c[1], high: +c[2], low: +c[3],
-        close: +c[4], volume: +c[5], closed: true,
-      })).reverse();
-      for (const k of ks) this.buf.okx15m.push(k);
-    }).catch(() => {});
-
-    await Promise.allSettled([fetch15m, fetch1h, fetch5m, bybitSeed, okxSeed]);
-    console.log(`[Seed] 15m=${this.buf.binance15m.length} 1h=${this.buf.binance1h.length} 5m=${this.buf.binance5m.length}`);
-  }
-
-  // ════════════════════════════════════════════════════════
-  // SLOW REST POLLS — only for data with no WS stream
-  // ════════════════════════════════════════════════════════
-
-  async _pollHyperliquid() {
-    // Generous REST, no documented rate limit — fills OI & funding
-    try {
-      const res = await fetch('https://api.hyperliquid.xyz/info', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ type: 'metaAndAssetCtxs' }),
-      });
-      const [meta, ctxs] = await res.json();
-      const idx = meta.universe.findIndex(a => a.name === 'BTC');
-      if (idx >= 0 && ctxs[idx]) {
-        const ctx = ctxs[idx];
-        this.hl = {
-          oi:      parseFloat(ctx.openInterest),
-          funding: parseFloat(ctx.funding),
-          markPx:  parseFloat(ctx.markPx),
-          valid:   true,
-        };
-        if (this._prevHLOI !== null) {
-          const pct = ((this.hl.oi - this._prevHLOI) / this._prevHLOI) * 100;
-          this.oi = { changePercent: pct, valid: true };
-        }
-        this._prevHLOI = this.hl.oi;
-      }
-    } catch {}
-  }
-
-  async _pollFearGreed() {
-    try {
-      const r = await fetch('https://api.alternative.me/fng/?limit=1');
-      const d = await r.json();
-      this.fearGreed = {
-        value: +d.data[0].value,
-        label: d.data[0].value_classification,
-        valid: true,
-      };
-    } catch {}
-  }
-
-  async _pollOI() {
-    if (this.oi.valid) return; // Hyperliquid already filled it
-    try {
-      const r = await fetch(
-        `https://fapi.binance.com/futures/data/openInterestHist?symbol=${SYMBOL}&period=15m&limit=16`
-      );
-      const d = await r.json();
-      const cur = +d[d.length - 1].sumOpenInterestValue;
-      const old = +d[0].sumOpenInterestValue;
-      this.oi = { changePercent: ((cur - old) / old) * 100, valid: true };
-    } catch {}
-  }
-
-  async _pollLS() {
-    if (this.ls.valid) return; // OKX WS already filled it
-    try {
-      const r = await fetch(
-        `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${SYMBOL}&period=5m&limit=1`
-      );
-      const d = await r.json();
-      this.ls = { ratio: +d[0].longShortRatio, valid: true };
-    } catch {}
-  }
+    return d.map(normBinance);
+  } catch { return []; }
 }
 
-// Normalise a Binance futures kline event payload
-function _normBinanceKline(k) {
+async function fetchKlines1h() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/klines?symbol=${SYMBOL}&interval=1h&limit=100`, 5000
+    );
+    return d.map(normBinance);
+  } catch { return []; }
+}
+
+async function fetchKlines5m() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/klines?symbol=${SYMBOL}&interval=5m&limit=60`, 5000
+    );
+    return d.map(normBinance);
+  } catch { return []; }
+}
+
+async function fetchBybit15m() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://api.bybit.com/v5/market/kline?category=linear&symbol=${SYMBOL}&interval=15&limit=300`, 5000
+    );
+    if (d.retCode !== 0) return [];
+    return d.result.list.map(c => ({
+      timestamp: parseInt(c[0]), open: +c[1], high: +c[2], low: +c[3],
+      close: +c[4], volume: +c[5], closed: true,
+    })).reverse();
+  } catch { return []; }
+}
+
+async function fetchOKX15m() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://www.okx.com/api/v5/market/candles?instId=${SYMBOL_OKX}&bar=15m&limit=300`, 5000
+    );
+    if (d.code !== '0') return [];
+    return d.data.map(c => ({
+      timestamp: parseInt(c[0]), open: +c[1], high: +c[2], low: +c[3],
+      close: +c[4], volume: +c[5], closed: true,
+    })).reverse();
+  } catch { return []; }
+}
+
+async function fetchFearGreed() {
+  try {
+    const d = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', 4000);
+    return { value: +d.data[0].value, label: d.data[0].value_classification, valid: true };
+  } catch { return _cache.fearGreed; }
+}
+
+async function fetchHyperliquid() {
+  try {
+    const res = await fetchWithTimeout('https://api.hyperliquid.xyz/info', 5000, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+    });
+    const [meta, ctxs] = res;
+    const idx = meta.universe.findIndex(a => a.name === 'BTC');
+    if (idx >= 0 && ctxs[idx]) {
+      const ctx = ctxs[idx];
+      return {
+        oi:      parseFloat(ctx.openInterest),
+        funding: parseFloat(ctx.funding),
+        markPx:  parseFloat(ctx.markPx),
+        valid:   true,
+      };
+    }
+    return _cache.hl;
+  } catch { return _cache.hl; }
+}
+
+async function fetchOI() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/futures/data/openInterestHist?symbol=${SYMBOL}&period=15m&limit=16`, 4000
+    );
+    const cur = +d[d.length - 1].sumOpenInterestValue;
+    const old = +d[0].sumOpenInterestValue;
+    return { changePercent: ((cur - old) / old) * 100, valid: true };
+  } catch { return _cache.oi; }
+}
+
+async function fetchLS() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${SYMBOL}&period=5m&limit=1`, 4000
+    );
+    return { ratio: +d[0].longShortRatio, valid: true };
+  } catch { return _cache.ls; }
+}
+
+async function fetchFunding() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${SYMBOL}`, 4000
+    );
+    return { rate: parseFloat(d.lastFundingRate), valid: true };
+  } catch { return _cache.funding; }
+}
+
+async function fetchBookTicker() {
+  try {
+    const d = await fetchWithTimeout(
+      `https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=${SYMBOL}`, 4000
+    );
+    const bid = parseFloat(d.bidPrice), ask = parseFloat(d.askPrice);
+    return { bid, ask, spread: ask - bid, valid: true };
+  } catch { return _cache.bookTick; }
+}
+
+// ============================================================
+// SECTION 5 — CACHE REFRESH LOGIC
+// ============================================================
+
+let _refreshPromise = null;
+
+async function refreshCache() {
+  // Parallel fetch everything
+  const [k15, k1h, k5m, by15, ox15, fg, hl, oi, ls, funding, book] = await Promise.all([
+    fetchKlines15m(),
+    fetchKlines1h(),
+    fetchKlines5m(),
+    fetchBybit15m(),
+    fetchOKX15m(),
+    fetchFearGreed(),
+    fetchHyperliquid(),
+    fetchOI(),
+    fetchLS(),
+    fetchFunding(),
+    fetchBookTicker(),
+  ]);
+
+  if (k15.length > 10) _cache.klines15m = mergeKlines(_cache.klines15m, k15);
+  if (k1h.length > 5)  _cache.klines1h  = mergeKlines(_cache.klines1h,  k1h);
+  if (k5m.length > 5)  _cache.klines5m  = mergeKlines(_cache.klines5m,  k5m);
+  if (by15.length > 10) _cache.bybit15m  = mergeKlines(_cache.bybit15m,  by15);
+  if (ox15.length > 10) _cache.okx15m    = mergeKlines(_cache.okx15m,    ox15);
+
+  _cache.fearGreed = fg;
+  _cache.hl        = hl;
+  _cache.funding   = funding;
+  _cache.bookTick  = book;
+
+  // OI: prefer Hyperliquid delta if available
+  if (hl.valid && _cache.hl.oi > 0) {
+    const prev = _cache.oi.valid && _cache.oi._prevHLOI ? _cache.oi._prevHLOI : hl.oi;
+    const pct  = prev > 0 ? ((hl.oi - prev) / prev) * 100 : 0;
+    _cache.oi  = { changePercent: pct, valid: true, _prevHLOI: hl.oi };
+  } else {
+    _cache.oi = oi;
+  }
+
+  _cache.ls          = ls;
+  _cache.lastUpdated = Date.now();
+
+  console.log(`[signals] Cache refreshed — 15m:${_cache.klines15m.length} 1h:${_cache.klines1h.length} 5m:${_cache.klines5m.length}`);
+}
+
+async function ensureFreshCache() {
+  const age = Date.now() - _cache.lastUpdated;
+  if (age < _cache.ttlMs && _cache.klines15m.length >= MIN_CANDLES['15m']) return;
+
+  // Deduplicate concurrent refreshes
+  if (!_refreshPromise) {
+    _refreshPromise = refreshCache().finally(() => { _refreshPromise = null; });
+  }
+  await _refreshPromise;
+}
+
+// ============================================================
+// SECTION 6 — BUILD SNAPSHOT (same shape as old WSDataLayer)
+// ============================================================
+
+function buildSnapshot() {
+  const b15  = _cache.klines15m;
+  const by15 = _cache.bybit15m;
+  const ok15 = _cache.okx15m;
+  const b1h  = _cache.klines1h;
+  const b5m  = _cache.klines5m;
+
+  const livePrices = [b15, by15, ok15]
+    .filter(k => k.length > 0)
+    .map(k => k[k.length - 1].close);
+
+  const consensusPrice = livePrices.length
+    ? livePrices.reduce((a, b) => a + b, 0) / livePrices.length
+    : 0;
+
+  const anomaly = livePrices.length >= 3
+    && (Math.max(...livePrices) - Math.min(...livePrices)) / Math.min(...livePrices) > 0.003;
+
+  const lastTs = b15.length ? b15[b15.length - 1].timestamp : 0;
+  const stale  = Date.now() - lastTs > 1_800_000;
+
   return {
-    timestamp: k.t,
-    open:      parseFloat(k.o),
-    high:      parseFloat(k.h),
-    low:       parseFloat(k.l),
-    close:     parseFloat(k.c),
-    volume:    parseFloat(k.v),
-    closed:    k.x,
+    ready:    !stale && b15.length >= MIN_CANDLES['15m'],
+    stale,
+    anomaly,
+    sources:  livePrices.length,
+    price:    consensusPrice || (b15.length ? b15[b15.length - 1].close : 0),
+
+    klines:   b15,
+    klines1h: b1h,
+    klines5m: b5m,
+
+    funding:   _cache.funding,
+    bookTick:  _cache.bookTick,
+    liqData:   { longLiq: 0, shortLiq: 0, magnet: null, count: 0, valid: false },
+    oi:        _cache.oi,
+    ls:        _cache.ls,
+    fearGreed: _cache.fearGreed,
+    hl:        _cache.hl,
   };
 }
 
 // ============================================================
-// SECTION 6 — INDICATORS (pure maths, no I/O)
+// SECTION 7 — INDICATORS (pure maths, no I/O)
 // ============================================================
 
 const Ind = {
@@ -617,8 +382,7 @@ const Ind = {
         sTR += tr; sPDM += pDM; sMDM += mDM;
         if (i === period) {
           const pDI = (sPDM / sTR) * 100, mDI = (sMDM / sTR) * 100;
-          const dx  = pDI + mDI ? (Math.abs(pDI - mDI) / (pDI + mDI)) * 100 : 0;
-          dxs.push(dx);
+          dxs.push(pDI + mDI ? (Math.abs(pDI - mDI) / (pDI + mDI)) * 100 : 0);
         }
       } else {
         sTR  = sTR  - sTR  / period + tr;
@@ -660,13 +424,12 @@ const Ind = {
     return { k, d };
   },
 
-  // Cumulative volume delta proxy — buy/sell pressure balance
   cvd(klines) {
     let cum = 0;
     const deltas = [];
     for (const k of klines) {
       const range = k.high - k.low || 0.001;
-      const bull  = (k.close - k.low) / range; // 0–1, proportion of bullish move
+      const bull  = (k.close - k.low) / range;
       cum += k.volume * (bull - 0.5) * 2;
       deltas.push(cum);
     }
@@ -677,7 +440,6 @@ const Ind = {
     return { direction: Math.sign(recent), momentum: recent / vol5, raw: deltas[n - 1] };
   },
 
-  // Order-book imbalance via candle wick structure
   obImbalance(klines, n = 10) {
     const s = klines.slice(-n);
     let buy = 0, sell = 0;
@@ -690,7 +452,6 @@ const Ind = {
     return { ratio: buy / total, bullish: buy > sell };
   },
 
-  // True fractal swing divergence (price vs indicator)
   divergence(prices, indicator, lookback = 30) {
     if (prices.length < lookback || indicator.length < lookback)
       return { type: 'NONE', score: 0 };
@@ -725,7 +486,6 @@ const Ind = {
     return { type: 'NONE', score: 0 };
   },
 
-  // Volume-weighted price profile
   volumeProfile(klines, lookback = 100, atr = 100) {
     const data = klines.slice(-lookback);
     const bs   = Math.max(50, Math.round(atr * 0.6));
@@ -743,7 +503,7 @@ const Ind = {
 };
 
 // ============================================================
-// SECTION 7 — MARKET REGIME
+// SECTION 8 — REGIME + MTF
 // ============================================================
 
 function detectRegime(adx, atr, bbWidth, price) {
@@ -753,10 +513,6 @@ function detectRegime(adx, atr, bbWidth, price) {
   if (atr > price * 0.007)         return 'BREAKOUT_IMMINENT';
   return 'CHOP';
 }
-
-// ============================================================
-// SECTION 8 — MULTI-TIMEFRAME CONTEXT
-// ============================================================
 
 function htfBias(klines1h) {
   if (!klines1h || klines1h.length < 30) return { bias: 'NEUTRAL', adx: 0 };
@@ -803,7 +559,7 @@ function computeScore(snap, derived) {
   const riskFlags = [];
 
   if (anomalyFlag)           riskFlags.push('Exchange Price Divergence >0.3%');
-  if (snap.sources === 1)    riskFlags.push(`Single Exchange Only`);
+  if (snap.sources === 1)    riskFlags.push('Single Exchange Only');
   if (snap.bookTick?.valid && snap.bookTick.spread > atr * 0.05)
                              riskFlags.push(`Wide Spread (${snap.bookTick.spread.toFixed(1)})`);
 
@@ -856,7 +612,7 @@ function computeScore(snap, derived) {
   if (obi.ratio > 0.65)      { score += 8; reasons.push(`Buy OB Imbalance ${(obi.ratio*100).toFixed(0)}%`); }
   else if (obi.ratio < 0.35) { score -= 8; reasons.push(`Sell OB Imbalance ${(obi.ratio*100).toFixed(0)}%`); }
 
-  // ── 8. Live bid/ask pressure ±5 (NEW — from WS bookTicker)
+  // ── 8. Live bid/ask pressure ±5 ─────────────────────────
   if (snap.bookTick?.valid) {
     const { bid, ask } = snap.bookTick;
     const midpoint = (bid + ask) / 2;
@@ -867,7 +623,7 @@ function computeScore(snap, derived) {
   // ── 9. Funding rate ──────────────────────────────────────
   const fr = fundingData.valid ? fundingData.rate : (hlData.valid ? hlData.funding : null);
   if (fr !== null) {
-    if (fr > 0.0005)   { score -= 10; reasons.push(`Funding Overheated (${(fr*100).toFixed(4)}%)`); }
+    if (fr > 0.0005)    { score -= 10; reasons.push(`Funding Overheated (${(fr*100).toFixed(4)}%)`); }
     else if (fr < -0.0001) { score += 15; reasons.push(`Funding Negative (${(fr*100).toFixed(4)}%)`); }
   }
 
@@ -931,7 +687,7 @@ function computeScore(snap, derived) {
   if (regime === 'TIGHT_RANGE') {
     if (rsi < 30) { score += 40; reasons.push('Tight Range RSI Extreme Oversold'); }
     else if (rsi > 70) { score -= 40; reasons.push('Tight Range RSI Extreme Overbought'); }
-    else score = 0; // no signal if not at extremes in tight range
+    else score = 0;
   }
 
   // ── Post-score multipliers ────────────────────────────────
@@ -972,62 +728,18 @@ function buildTargets(signal, price, atr, atrMult, liqMagnet) {
 }
 
 // ============================================================
-// SECTION 11 — SIGNAL ENGINE (wraps data layer)
+// SECTION 11 — SIGNAL ENGINE (public API)
 // ============================================================
 
 class SignalEngine {
-  constructor() {
-    this._data     = new WSDataLayer();
-    this._listeners = [];
-    this._loopId   = null;
-  }
-
-  // ── Start everything ────────────────────────────────────────
-  async connect() {
-    await this._data.connect();
-  }
-
-  // ── Subscribe to automatic signals (fires on each closed 15m candle)
-  on(event, cb) {
-    if (event === 'signal') this._listeners.push(cb);
-    return this;
-  }
-
-  // Start auto-signal loop — checks every 5s, emits on new closed candle
-  startLoop() {
-    let lastCandleTs = 0;
-    this._loopId = setInterval(() => {
-      const snap = this._data.snapshot();
-      if (!snap.ready || !snap.klines.length) return;
-      const latest = snap.klines[snap.klines.length - 1];
-      if (latest.closed && latest.timestamp !== lastCandleTs) {
-        lastCandleTs = latest.timestamp;
-        const result = this._compute(snap);
-        this._listeners.forEach(cb => cb(result));
-      }
-    }, 5_000);
-    return this;
-  }
-
-  stopLoop() {
-    clearInterval(this._loopId);
-    this._loopId = null;
-  }
-
-  // ── Manual call — instant, synchronous ─────────────────────
-  generateSignal() {
-    const snap = this._data.snapshot();
+  // ── Main entry point — async, fetches fresh data then computes
+  async generateSignal() {
+    await ensureFreshCache();
+    const snap = buildSnapshot();
     return this._compute(snap);
   }
 
-  destroy() {
-    this.stopLoop();
-    this._data.destroy();
-  }
-
-  // ── Internal compute ─────────────────────────────────────────
   _compute(snap) {
-    // Guard: not enough data yet
     if (!snap.ready) {
       return this._neutral(
         snap.stale ? 'Stale candles >30m' : 'Warming up — insufficient candle history'
@@ -1038,7 +750,6 @@ class SignalEngine {
     const closes  = klines.map(k => k.close);
     const volumes = klines.map(k => k.volume);
 
-    // ── Regime-specific config ─────────────────────────────
     const atr    = Ind.atr(klines);
     const adx    = Ind.adx(klines);
     const bb     = Ind.bollingerBands(closes);
@@ -1049,7 +760,6 @@ class SignalEngine {
     if (regime === 'BREAKOUT_IMMINENT') { reqScore = 45; atrMult = 2.5; }
     if (regime === 'STRONG_TREND')      { reqScore = 48; atrMult = 1.8; }
 
-    // ── Indicators ─────────────────────────────────────────
     const rsiArray   = Ind.rsiArray(closes);
     const rsi        = rsiArray[rsiArray.length - 1];
     const macd       = Ind.macd(closes);
@@ -1057,11 +767,9 @@ class SignalEngine {
     const volSMA     = Ind.sma(volumes.slice(0, -1), 20);
     const relativeVol = Math.max(volumes[volumes.length - 1], volumes[volumes.length - 2]) / (volSMA || 1);
 
-    // ── MTF context ────────────────────────────────────────
     const htf   = htfBias(klines1h);
     const micro = microEntry(klines5m);
 
-    // ── Score ──────────────────────────────────────────────
     const derived = {
       fundingData:  snap.funding,
       oiData:       snap.oi,
@@ -1077,12 +785,10 @@ class SignalEngine {
 
     const { score: rawScore, reasons, riskFlags } = computeScore(snap, derived);
 
-    // ── Signal decision ────────────────────────────────────
     let signal = 'NEUTRAL';
     if (rawScore >=  reqScore) signal = 'LONG';
     if (rawScore <= -reqScore) signal = 'SHORT';
 
-    // ── Confidence ────────────────────────────────────────
     let confidence = (Math.abs(rawScore) * 0.5 + reasons.length * 2.5) *
       (snap.sources >= 3 ? 1.0 : snap.sources === 2 ? 0.90 : 0.80);
     if (!anomaly && snap.sources >= 2) confidence *= 1.15;
@@ -1090,27 +796,22 @@ class SignalEngine {
     if (micro.confirm)                 confidence *= 1.08;
     confidence = Math.min(97, Math.max(0, Math.round(confidence)));
 
-    // ── Execution gate ────────────────────────────────────
     const gate = executionGate(signal, confidence, riskFlags);
     if (!gate.approved) { signal = 'NEUTRAL'; confidence = Math.max(0, confidence - 30); }
 
-    // ── Targets ───────────────────────────────────────────
     const targets = buildTargets(signal, currentPrice, atr, atrMult, snap.liqData.magnet);
 
-    // ── Stoch for output ──────────────────────────────────
     const stoch = Ind.stochRsi(closes);
     const cvd   = Ind.cvd(klines);
     const obi   = Ind.obImbalance(klines);
 
     return {
-      // ── Core signal ──────────────────────────────────────
       signal,
       confidence,
       score:    rawScore,
       regime,
       marginMultiplier: gate.multiplier,
 
-      // ── Entry timing (5m) ─────────────────────────────
       microEntry: {
         confirmed:  micro.confirm,
         direction:  micro.direction > 0 ? 'LONG' : micro.direction < 0 ? 'SHORT' : 'WAIT',
@@ -1119,7 +820,6 @@ class SignalEngine {
           : 'Await 5m candle confirmation before entering',
       },
 
-      // ── HTF context (1h) ──────────────────────────────
       htfContext: {
         bias:    htf.bias,
         adx1h:   htf.adx.toFixed(1),
@@ -1130,18 +830,16 @@ class SignalEngine {
           : `1h is ${htf.bias === 'BULL' ? 'bullish' : 'bearish'}, ADX ${htf.adx.toFixed(0)}`,
       },
 
-      // ── Risk levels (3-level TP ladder) ───────────────
       targets: {
         entry:    +currentPrice.toFixed(2),
         stopLoss: targets.stopLoss,
-        tp1:      targets.tp1,      // exit 33%
-        tp2:      targets.tp2,      // exit 33%
-        tp3:      targets.tp3,      // trail remainder
+        tp1:      targets.tp1,
+        tp2:      targets.tp2,
+        tp3:      targets.tp3,
         atr:      +atr.toFixed(2),
         liqMagnet: snap.liqData.magnet || null,
       },
 
-      // ── Market structure (flow) ────────────────────────
       marketStructure: {
         fundingRate:    snap.funding.valid   ? +snap.funding.rate.toFixed(6) : null,
         hlFunding:      snap.hl.valid        ? +snap.hl.funding.toFixed(6)   : null,
@@ -1149,8 +847,8 @@ class SignalEngine {
         longShortRatio: snap.ls.valid        ? +snap.ls.ratio.toFixed(2)     : null,
         fearGreedIndex: snap.fearGreed.valid ? snap.fearGreed.value          : null,
         fearGreedLabel: snap.fearGreed.valid ? snap.fearGreed.label          : null,
-        liqLongBTC:     +snap.liqData.longLiq.toFixed(4),
-        liqShortBTC:    +snap.liqData.shortLiq.toFixed(4),
+        liqLongBTC:     0,
+        liqShortBTC:    0,
         poc:            +volProfile.poc.toFixed(2),
         vah:            +volProfile.vah.toFixed(2),
         val:            +volProfile.val.toFixed(2),
@@ -1159,7 +857,6 @@ class SignalEngine {
         spread:         snap.bookTick.valid ? +snap.bookTick.spread.toFixed(2): null,
       },
 
-      // ── Technical snapshot ─────────────────────────────
       indicators: {
         price:       +currentPrice.toFixed(2),
         rsi:         +rsi.toFixed(2),
@@ -1176,14 +873,13 @@ class SignalEngine {
         cvdDir:      cvd.direction > 0 ? 'BULL' : cvd.direction < 0 ? 'BEAR' : 'FLAT',
         cvdMomentum: +cvd.momentum.toFixed(3),
         obiRatio:    +obi.ratio.toFixed(2),
-        volatility:  `${((atr / currentPrice) * 100).toFixed(2)}%`,
+        volatility:  +((atr / currentPrice) * 100).toFixed(2),
       },
 
-      // ── Signal quality meta ────────────────────────────
       dataQuality: {
         sources:      snap.sources,
         anomaly:      anomaly,
-        wsLive:       true,  // always true — data comes from WS, not REST polling
+        cacheAgeMs:   Date.now() - _cache.lastUpdated,
         candlesReady: klines.length,
         stale:        snap.stale,
       },
@@ -1201,7 +897,7 @@ class SignalEngine {
       targets:         { entry: 0, stopLoss: 0, tp1: 0, tp2: 0, tp3: 0, atr: 0, liqMagnet: null },
       marketStructure: {},
       indicators:      {},
-      dataQuality:     { sources: 0, anomaly: false, wsLive: true, candlesReady: 0, stale: false },
+      dataQuality:     { sources: 0, anomaly: false, cacheAgeMs: 0, candlesReady: 0, stale: false },
       reasons: [], riskFlags: [reason], timestamp: Date.now(),
     };
   }
@@ -1211,40 +907,8 @@ class SignalEngine {
 // SECTION 12 — EXPORTS
 // ============================================================
 
-// Singleton — import once, use everywhere
-export const engine = new SignalEngine();
+// Named `signalEngine` so existing status.js + evaluate.js imports work with zero changes
+export const signalEngine = new SignalEngine();
 
-// ── Quick-start example ─────────────────────────────────────
-//
-//  import { engine } from './ULTIMATE_SIGNAL_V2.js';
-//
-//  // 1. Connect once at startup (seeds klines, opens WS streams)
-//  await engine.connect();
-//
-//  // 2a. Manual call — synchronous, instant, zero I/O
-//  const s = engine.generateSignal();
-//  console.log(s.signal, s.confidence, s.targets);
-//
-//  // 2b. Auto loop — fires callback on every closed 15m candle
-//  engine
-//    .on('signal', s => {
-//      if (s.signal !== 'NEUTRAL') {
-//        console.log(`${s.signal} @ ${s.targets.entry}`);
-//        console.log(`SL ${s.targets.stopLoss}  TP1 ${s.targets.tp1}`);
-//        console.log(`TP2 ${s.targets.tp2}  TP3 ${s.targets.tp3}`);
-//        console.log(`Confidence ${s.confidence}%  Regime ${s.regime}`);
-//        console.log('Reasons:', s.reasons);
-//        console.log('Flags:  ', s.riskFlags);
-//      }
-//    })
-//    .startLoop();
-//
-//  // 3. Clean up
-//  engine.destroy();
-//
-// ── Vercel / Cloudflare Workers note ────────────────────────
-//  WebSockets work in Node.js 18+ and Cloudflare Workers natively.
-//  For Vercel serverless, use the engine in a long-lived Edge
-//  runtime (runtime: 'edge') or a separate persistent process.
-//  Do NOT use in standard Vercel lambda functions — they die
-//  between requests and close the WS connections.
+// Also export as `engine` for backwards compatibility
+export const engine = signalEngine;
