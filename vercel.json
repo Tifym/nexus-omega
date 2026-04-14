@@ -1,12 +1,6 @@
 {
   "version": 2,
   "regions": ["fra1"],
-  "crons": [
-    {
-      "path": "/api/data-sync",
-      "schedule": "*/2 * * * *"
-    }
-  ],
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/$1.js" },
     { "src": "/sounds/(.*)", "dest": "/public/sounds/$1" },
