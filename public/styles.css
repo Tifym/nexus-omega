@@ -286,6 +286,7 @@ body {
 .type-badge { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; }
 .type-badge.open { background: rgba(240, 185, 11, 0.15); color: var(--accent-yellow); border: 1px solid rgba(240, 185, 11, 0.3); }
 .type-badge.close { background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); border: 1px solid var(--glass-border); }
+.type-badge.partial_close { background: rgba(249, 115, 22, 0.15); color: var(--accent-orange); border: 1px solid rgba(249, 115, 22, 0.35); }
 .side-badge { font-size: 10px; font-weight: 700; }
 .side-badge.long { color: var(--accent-green); }
 .side-badge.short { color: var(--accent-red); }

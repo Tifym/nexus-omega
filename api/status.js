@@ -33,6 +33,11 @@ export default async function handler(req, res) {
     const history  = historyResult.data  || [];
     const cached   = cacheResult.data;
 
+    // If trading_state row is missing, seed it so balance never resets
+    if (!stateResult.data) {
+      supabase.from('trading_state').upsert({ id: 'main', ...DEFAULT_STATE }).then(() => {}).catch(() => {});
+    }
+
     // ── 2. Decide: use cache or live fallback ─────────────────
     const cacheAge  = cached?.computed_at
       ? now - new Date(cached.computed_at).getTime()
@@ -78,7 +83,7 @@ export default async function handler(req, res) {
 
     // ── 3. Cooldown calculation ───────────────────────────────
     const lastTime       = state.last_trade_time ? Number(state.last_trade_time) : 0;
-    const cooldownMs     = 5 * 60 * 1000;
+    const cooldownMs     = 2 * 60 * 1000;
     const cooldownActive = lastTime && (now - lastTime) < cooldownMs;
     const cooldownRemaining = cooldownActive
       ? Math.ceil((cooldownMs - (now - lastTime)) / 60000)
@@ -147,6 +152,7 @@ export default async function handler(req, res) {
         pnlPercent: t.pnl_percent,
         reason:     t.reason,
         time:       t.created_at,
+        margin:     t.margin,
       })),
       lastTrade: history[0] ? {
         type:       history[0].type,

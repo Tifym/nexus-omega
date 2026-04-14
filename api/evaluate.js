@@ -35,7 +35,7 @@ export default async function handler(req, res) {
 
     const now = Date.now();
     const lastTime = state.last_trade_time ? Number(String(state.last_trade_time)) : 0;
-    const cooldownMs = 5 * 60 * 1000; // 5 min
+    const cooldownMs = 2 * 60 * 1000; // 2 min
     const onCooldown = lastTime > 0 && (now - lastTime) < cooldownMs;
 
     // 6. Stale Signal Protection
@@ -102,7 +102,8 @@ export default async function handler(req, res) {
         await supabase.from('positions').update({ status: 'CLOSED', exit_price: price }).eq('id', openPos.id);
         await supabase.from('trade_history').insert({
           type: 'CLOSE', side: openPos.side, entry_price: openPos.entry_price, exit_price: price,
-          margin, leverage: 20, net_pnl: netPnl, pnl_percent: (netPnl / margin) * 100, reason: exitReason
+          margin, leverage: 20, net_pnl: netPnl, pnl_percent: (netPnl / margin) * 100, reason: exitReason,
+          created_at: new Date().toISOString()
         });
         await supabase.from('trading_state').update({
           balance: newBalance,
@@ -126,7 +127,8 @@ export default async function handler(req, res) {
 
         await supabase.from('trade_history').insert({
           type: 'PARTIAL_CLOSE', side: openPos.side, entry_price: openPos.entry_price, exit_price: price,
-          margin: halfMargin, leverage: 20, net_pnl: halfNetPnl, pnl_percent: (halfNetPnl / halfMargin) * 100, reason: exitReason
+          margin: halfMargin, leverage: 20, net_pnl: halfNetPnl, pnl_percent: (halfNetPnl / halfMargin) * 100, reason: exitReason,
+          created_at: new Date().toISOString()
         });
 
         await supabase.from('trading_state').update({
@@ -179,7 +181,8 @@ export default async function handler(req, res) {
             } else {
               await supabase.from('trade_history').insert({
                 type: 'OPEN', side: isLong ? 'LONG' : 'SHORT', entry_price: consensus.consensusPrice, margin, leverage: 20,
-                reason: `${signal.signal} | Conf: ${signal.confidence}% | Rgm: ${signal.regime} | Flags: ${(signal.riskFlags || []).join(',')}`
+                reason: `${signal.signal} | Conf: ${signal.confidence}% | Rgm: ${signal.regime} | Flags: ${(signal.riskFlags || []).join(',')}`,
+                created_at: new Date().toISOString()
               });
 
               await supabase.from('trading_state').update({

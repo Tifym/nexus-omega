@@ -386,16 +386,25 @@ class NexusOmegaDashboard {
                 histList.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No trades yet</div><div class="empty-sub">Waiting for first signal...</div></div>';
             } else {
                 histList.innerHTML = trades.map((t, i) => {
-                    const isPnlTrade = t.type === 'CLOSE';
+                    const isPnlTrade = t.type === 'CLOSE' || t.type === 'PARTIAL_CLOSE';
                     const pnlClass   = isPnlTrade ? (t.netPnl >= 0 ? 'profit' : 'loss') : '';
                     const pnlStr     = isPnlTrade ? ((t.netPnl >= 0 ? '+' : '') + '$' + this.formatPrice(t.netPnl)) : '--';
-                    const dateStr    = t.time ? new Date(t.time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '--';
+                    const tradeDate  = t.time ? new Date(t.time) : null;
+                    const today      = new Date();
+                    const isToday    = tradeDate && tradeDate.toDateString() === today.toDateString();
+                    const dateStr    = tradeDate
+                        ? (isToday
+                            ? tradeDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
+                            : tradeDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + tradeDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }))
+                        : '--';
+                    const typeBadgeLabel = t.type === 'PARTIAL_CLOSE' ? 'PARTIAL' : t.type;
+                    const typeBadgeClass = t.type === 'PARTIAL_CLOSE' ? 'partial_close' : t.type.toLowerCase();
                     return `
                     <div class="history-item ${pnlClass}" style="animation-delay:${i * 0.05}s">
                         <div class="history-main">
                             <div class="history-left">
                                 <div class="history-type-row">
-                                    <span class="type-badge ${t.type.toLowerCase()}">${t.type}</span>
+                                    <span class="type-badge ${typeBadgeClass}">${typeBadgeLabel}</span>
                                     ${t.side ? `<span class="side-badge ${t.side.toLowerCase()}">${t.side}</span>` : ''}
                                 </div>
                                 <div class="history-time">${dateStr}</div>
